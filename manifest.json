@@ -1,0 +1,46 @@
+{
+  "manifest_version": 3,
+  "name": "蒲公英达人导出同步飞书",
+  "version": "0.4.1",
+  "description": "导出蒲公英当前筛选条件下的达人表格，同步到飞书，并补足详情。",
+  "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs", "sidePanel", "debugger", "notifications"],
+  "host_permissions": [
+    "<all_urls>",
+    "https://pgy.xiaohongshu.com/*",
+    "https://open.feishu.cn/*",
+    "https://open.larksuite.com/*",
+    "http://127.0.0.1:*/*",
+    "http://localhost:*/*"
+  ],
+  "action": {
+    "default_title": "蒲公英达人导出同步飞书"
+  },
+  "side_panel": {
+    "default_path": "popup.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["https://pgy.xiaohongshu.com/*"],
+      "js": ["detail-hook.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["https://pgy.xiaohongshu.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["page-hook.js"],
+      "matches": ["https://pgy.xiaohongshu.com/*"]
+    }
+  ]
+}

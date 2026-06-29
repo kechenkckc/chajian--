@@ -1,0 +1,93 @@
+#pgy-exporter-panel {
+  position: fixed;
+  right: 18px;
+  bottom: 18px;
+  z-index: 2147483647;
+  width: 292px;
+  color: #14201a;
+  background: #f7fbf6;
+  border: 1px solid rgba(28, 76, 52, 0.24);
+  box-shadow: 0 18px 44px rgba(21, 44, 31, 0.18);
+  font: 13px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+  transform: translate3d(0, 0, 0);
+  backface-visibility: hidden;
+  will-change: transform;
+}
+
+#pgy-exporter-panel button {
+  font: inherit;
+}
+
+.pgy-exporter-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 38px;
+  padding: 0 10px 0 12px;
+  color: #f9fff7;
+  background: #1f5a3e;
+}
+
+.pgy-exporter-head strong {
+  font-weight: 700;
+  letter-spacing: 0;
+}
+
+.pgy-exporter-head button {
+  width: 26px;
+  height: 26px;
+  border: 0;
+  color: #f9fff7;
+  background: transparent;
+  cursor: pointer;
+}
+
+.pgy-exporter-body {
+  padding: 12px;
+}
+
+.pgy-exporter-status {
+  min-height: 38px;
+  padding: 8px 10px;
+  color: #2b4638;
+  background: #eaf2e8;
+  border: 1px solid rgba(31, 90, 62, 0.18);
+  word-break: break-word;
+}
+
+.pgy-exporter-status.is-error {
+  color: #8a261f;
+  background: #fff0ec;
+  border-color: rgba(168, 56, 44, 0.32);
+}
+
+.pgy-exporter-actions {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pgy-exporter-actions button {
+  height: 34px;
+  border: 1px solid rgba(31, 90, 62, 0.28);
+  color: #143f2c;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.pgy-exporter-actions button:hover {
+  background: #edf6ea;
+}
+
+#pgy-exporter-panel.is-collapsed {
+  width: 168px;
+}
+
+#pgy-exporter-panel.is-collapsed .pgy-exporter-body {
+  display: none;
+}
+
+#pgy-exporter-panel.pgy-exporter-repaint {
+  transform: translate3d(0, 0, 0) scale(1);
+}

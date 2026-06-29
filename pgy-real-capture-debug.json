@@ -1,0 +1,52 @@
+{
+  "audiencePrepared": {
+    "ok": true,
+    "kind": "audience",
+    "found": true,
+    "text": " 性别分布 暂无数据 年龄分布 暂无数据",
+    "targetRect": {
+      "x": 430,
+      "y": 497,
+      "width": 778,
+      "height": 194
+    },
+    "pageRect": {
+      "x": 430,
+      "y": 497,
+      "width": 778,
+      "height": 194
+    },
+    "viewport": {
+      "width": 1251,
+      "height": 1286,
+      "scrollX": 0,
+      "scrollY": 0,
+      "deviceScaleFactor": 1.5
+    }
+  },
+  "overviewPrepared": {
+    "ok": true,
+    "kind": "overview",
+    "found": true,
+    "text": "数据概览 笔记数据 按规模 按成本 日常笔记 合作笔记 曝光中位数 - 优于 - 同行 阅读中位数 - 优于 - 同行 互动中位数 - 优于 - 同行 服务表现 近7天活跃天数 -- 邀约48小时回复率 -- 成长表现 粉丝量变化幅度 -- 优于 -- 同行",
+    "targetRect": {
+      "x": 397,
+      "y": 153,
+      "width": 843,
+      "height": 447
+    },
+    "pageRect": {
+      "x": 397,
+      "y": 153,
+      "width": 843,
+      "height": 447
+    },
+    "viewport": {
+      "width": 1251,
+      "height": 1286,
+      "scrollX": 0,
+      "scrollY": 0,
+      "deviceScaleFactor": 1.5
+    }
+  }
+}

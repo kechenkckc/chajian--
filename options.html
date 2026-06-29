@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>蒲公英达人同步飞书 - 飞书配置</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="settings">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">飞书配置</p>
+          <h1>蒲公英达人同步飞书</h1>
+        </div>
+        <p class="note">这组凭证用于插件访问飞书。</p>
+      </header>
+
+      <section class="band status-band">
+        <h2>当前配置状态</h2>
+        <div class="status-grid">
+          <div class="status-item">
+            <span>扩展 ID</span>
+            <strong id="extensionId">-</strong>
+          </div>
+          <div class="status-item">
+            <span>飞书 App ID</span>
+            <strong id="appIdState">未填写</strong>
+          </div>
+          <div class="status-item">
+            <span>同步设置</span>
+            <strong id="syncTargetState">未检测</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="band">
+        <h2>飞书配置</h2>
+        <label>
+          <span>飞书 App ID</span>
+          <input id="feishuAppId" type="text" autocomplete="off" placeholder="cli_xxx" />
+        </label>
+        <label>
+          <span>飞书 App Secret</span>
+          <input id="feishuAppSecret" type="password" autocomplete="off" placeholder="仅保存在本机浏览器" />
+        </label>
+      </section>
+
+      <div hidden>
+        <input id="feishuUrl" type="hidden" />
+        <input id="feishuSheetId" type="hidden" />
+        <input id="detailFeishuUrl" type="hidden" />
+        <input id="detailFeishuSheetId" type="hidden" />
+        <input id="pageSize" type="hidden" />
+        <input id="maxRows" type="hidden" />
+        <input id="detailLimit" type="hidden" />
+        <input id="detailTraverseAllSheets" type="checkbox" />
+      </div>
+
+      <div class="actions">
+        <button id="checkSyncBtn" type="button" class="secondary">检测同步设置</button>
+        <button id="saveBtn" type="button">保存设置</button>
+      </div>
+      <p id="status">设置会保存在当前 Chrome 扩展实例里。卸载重装后需要重新填写。</p>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

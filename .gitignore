@@ -1,0 +1,7 @@
+.chrome-controlled-profile/
+.chrome-test-profile/
+
+*.log
+*.tmp
+Thumbs.db
+Desktop.ini

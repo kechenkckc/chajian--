@@ -1,0 +1,54 @@
+{
+  "url": "https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/5b6a90ad93e7f20001feb0bf?track_id=kolMatch_d7b71daf4a48415a85ba83e9759c06fa&fromRoute=Advertiser_Kol&source=Advertiser_Kol",
+  "title": "神田优作 的主页 - 小红书蒲公英",
+  "overviewPrepared": {
+    "ok": true,
+    "kind": "overview",
+    "found": true,
+    "text": "数据概览 博主优势品效型博主发布笔记15篇内容类目美妆、影视综资讯合作行业食品饮料、美妆个护 笔记数据 按规模 按成本 日常笔记 合作笔记 曝光中位数 200,680 优于 88.37% 同行 阅读中位数 60,243 优于 92.05% 同行 互动中位数 3,753 优于 93.81% 同行 服务表现 近7天活跃天数 7 天 活跃 邀约48小时回复率 96.9 % 好联系 成长表现 粉丝量变化幅度 3.3% 优于 95.6% 同行",
+    "targetRect": {
+      "x": 397,
+      "y": 153,
+      "width": 843,
+      "height": 511
+    },
+    "pageRect": {
+      "x": 397,
+      "y": 153,
+      "width": 843,
+      "height": 511
+    },
+    "viewport": {
+      "width": 1251,
+      "height": 1286,
+      "scrollX": 0,
+      "scrollY": 0,
+      "deviceScaleFactor": 1.5
+    }
+  },
+  "audiencePrepared": {
+    "ok": true,
+    "kind": "audience",
+    "found": true,
+    "text": "性别分布 女性居多，占比67.3% 年龄分布 25-34居多，占比43.6%",
+    "targetRect": {
+      "x": 429,
+      "y": 470,
+      "width": 779,
+      "height": 387
+    },
+    "pageRect": {
+      "x": 429,
+      "y": 485,
+      "width": 779,
+      "height": 387
+    },
+    "viewport": {
+      "width": 1251,
+      "height": 1286,
+      "scrollX": 0,
+      "scrollY": 15,
+      "deviceScaleFactor": 1.5
+    }
+  }
+}

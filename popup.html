@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <title>蒲公英达人同步飞书</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">蒲公英达人导出飞书同步插件</p>
+          <h1>蒲公英达人同步飞书</h1>
+        </div>
+        <div class="badges">
+          <span id="syncStateBadge" class="badge">同步未就绪</span>
+          <span id="detailStateBadge" class="badge badge-alt">详情未就绪</span>
+        </div>
+      </header>
+
+      <section class="band">
+        <div class="section-head">
+          <div>
+            <h2>导出当前达人</h2>
+            <p class="hint">导出当前筛选条件下的达人为表格，勾选后会在导出完成后直接写回飞书。</p>
+          </div>
+        </div>
+        <div class="grid">
+          <label>
+            <span>每页数量</span>
+            <input id="pageSize" type="number" min="1" max="100" />
+          </label>
+          <label>
+            <span>最多采集</span>
+            <input id="maxRows" type="number" min="1" max="20000" />
+          </label>
+        </div>
+        <label class="inline">
+          <input id="writeToFeishuOnExport" type="checkbox" />
+          <span>导出后直接写回飞书</span>
+        </label>
+        <p id="exportHint" class="supporting"></p>
+        <div class="actions">
+          <button id="stopExportBtn" type="button">停止采集</button>
+          <button id="exportBtn" type="button" class="primary">导出当前达人</button>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="section-head">
+          <div>
+            <h2>直接采集达人到飞书</h2>
+            <ol class="steps">
+              <li>在下方“飞书配置”填写并保存 App ID、App Secret。</li>
+              <li>填写同步达人飞书表格；多个子表时可填写子表 ID。</li>
+              <li>点击“检测写入”，确认表格可写后再开始采集写入。</li>
+            </ol>
+          </div>
+        </div>
+        <div class="segmented" role="tablist" aria-label="同步来源">
+          <button id="syncSourceCurrentBtn" type="button" class="seg active" aria-pressed="true">当前筛选</button>
+          <button id="syncSourceImportedBtn" type="button" class="seg" aria-pressed="false">已下载表格</button>
+        </div>
+        <label id="csvRow" class="file-row hidden">
+          <span>选择已下载达人 CSV</span>
+          <input id="csvFile" type="file" accept=".csv,.txt,text/csv,text/plain" />
+        </label>
+        <div class="split">
+          <label>
+            <span>同步达人飞书表格</span>
+            <input id="feishuUrl" type="url" placeholder="https://xxx.feishu.cn/sheets/..." />
+          </label>
+          <label>
+            <span>同步子表 ID</span>
+            <input id="feishuSheetId" type="text" placeholder="多个子表时填写，可留空" />
+          </label>
+        </div>
+        <p id="syncHint" class="supporting"></p>
+        <div class="actions">
+          <button id="syncValidateBtn" type="button">检测写入</button>
+          <button id="syncBtn" type="button" class="primary">直接采集达人到飞书</button>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="section-head">
+          <div>
+            <h2>补足详情</h2>
+            <ol class="steps">
+              <li>准备一张独立的详情表，不能和同步达人表格相同。</li>
+              <li>填写详情表链接；多个子表时可填写详情子表 ID，或检测后遍历所有子表。</li>
+              <li>点击“检测详情表”，确认无误后点击“补足详情”。</li>
+            </ol>
+          </div>
+        </div>
+        <label>
+          <span>需补足详情的飞书表格</span>
+          <input id="detailFeishuUrl" type="url" placeholder="https://xxx.feishu.cn/sheets/..." />
+        </label>
+        <label>
+          <span>详情子表 ID</span>
+          <input id="detailFeishuSheetId" type="text" placeholder="多个子表时填写，可留空" />
+        </label>
+        <label>
+          <span>补足数量</span>
+          <input id="detailLimit" type="number" min="1" max="20000" placeholder="留空为全部" />
+        </label>
+        <label class="inline">
+          <input id="detailTraverseAllSheets" type="checkbox" disabled />
+          <span>遍历所有子表</span>
+        </label>
+        <p id="detailHint" class="supporting"></p>
+        <div class="actions">
+          <button id="detailValidateBtn" type="button">检测详情表</button>
+          <button id="stopDetailBtn" type="button">停止补足</button>
+          <button id="backfillBtn" type="button" class="primary">补足详情</button>
+        </div>
+      </section>
+
+      <section class="band">
+        <div class="section-head">
+          <div>
+            <h2>飞书配置</h2>
+            <ol class="steps">
+              <li>填写飞书应用的 App ID 和 App Secret。</li>
+              <li>点击“保存配置”，保存后上方功能会自动读取。</li>
+              <li>同步达人表格和详情表格请分别在对应模块填写。</li>
+            </ol>
+          </div>
+        </div>
+        <label>
+          <span>飞书 App ID</span>
+          <input id="feishuAppId" type="text" autocomplete="off" placeholder="cli_xxx" />
+        </label>
+        <label>
+          <span>飞书 App Secret</span>
+          <input id="feishuAppSecret" type="password" autocomplete="off" placeholder="仅保存在本机浏览器" />
+        </label>
+        <div class="actions">
+          <button id="openOptionsBtn" type="button">打开飞书配置</button>
+          <button id="saveBtn" type="button" class="primary">保存配置</button>
+        </div>
+      </section>
+
+      <p id="status">先在蒲公英页面筛选达人，再导出、同步或补足详情。</p>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>
