@@ -21,6 +21,10 @@
   let latestProgress = "";
   let exporting = false;
 
+  function isBloggerDetailPage() {
+    return location.pathname.includes("/solar/pre-trade/blogger-detail/");
+  }
+
   function injectPageHook() {
     if (document.getElementById("pgy-exporter-page-hook")) return;
     const script = document.createElement("script");
@@ -140,6 +144,7 @@
   }
 
   function ensurePanelVisible() {
+    if (isBloggerDetailPage()) return;
     let panel = document.getElementById("pgy-exporter-panel");
     if (!panel) {
       createPanel();
@@ -159,6 +164,7 @@
   }
 
   function createPanel() {
+    if (isBloggerDetailPage()) return;
     if (document.getElementById("pgy-exporter-panel")) return;
     const panel = document.createElement("section");
     panel.id = "pgy-exporter-panel";
@@ -255,6 +261,7 @@
   });
 
   window.addEventListener("resize", () => {
+    if (isBloggerDetailPage()) return;
     requestAnimationFrame(ensurePanelVisible);
   });
 

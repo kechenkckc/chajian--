@@ -1,5 +1,6 @@
 .chrome-controlled-profile/
 .chrome-test-profile/
+dist/
 
 *.log
 *.tmp

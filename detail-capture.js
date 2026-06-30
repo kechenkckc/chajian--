@@ -452,12 +452,28 @@
   }
 
   async function prepareCapture(kind) {
-    const floatingPanel = document.getElementById("pgy-exporter-panel");
-    if (floatingPanel) {
-      floatingPanel.remove();
-      floatingPanel.style.setProperty("display", "none", "important");
-      floatingPanel.style.setProperty("visibility", "hidden", "important");
-      floatingPanel.style.setProperty("opacity", "0", "important");
+    let hideStyle = document.getElementById("pgy-detail-hide-extension-ui");
+    if (!hideStyle) {
+      hideStyle = document.createElement("style");
+      hideStyle.id = "pgy-detail-hide-extension-ui";
+      hideStyle.textContent = `
+        #pgy-exporter-panel,
+        [id^="pgy-exporter-"],
+        .pgy-exporter-head,
+        .pgy-exporter-body,
+        .pgy-exporter-status,
+        .pgy-exporter-actions {
+          display: none !important;
+          visibility: hidden !important;
+          opacity: 0 !important;
+          pointer-events: none !important;
+        }
+      `;
+      (document.head || document.documentElement).appendChild(hideStyle);
+    }
+    for (const node of Array.from(document.querySelectorAll("#pgy-exporter-panel, [id^='pgy-exporter-']"))) {
+      if (node.id === "pgy-detail-hide-extension-ui") continue;
+      node.remove();
     }
     clickDetailTab(kind);
     await sleep(900);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "蒲公英达人导出同步飞书",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "导出蒲公英当前筛选条件下的达人表格，同步到飞书，并补足详情。",
   "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs", "sidePanel", "debugger", "notifications"],
   "host_permissions": [
@@ -32,6 +32,7 @@
     },
     {
       "matches": ["https://pgy.xiaohongshu.com/*"],
+      "exclude_matches": ["https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/*"],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_start"

@@ -101,6 +101,17 @@ function detailReady(options = currentOptions()) {
   );
 }
 
+function detailReadinessMessage(options = currentOptions()) {
+  if (options.detailFeishuUrl && options.detailFeishuUrl === options.feishuUrl) {
+    return "需补足详情的飞书表格不能和同步达人飞书表格相同。";
+  }
+  const missing = [];
+  if (!options.feishuAppId) missing.push("App ID");
+  if (!options.feishuAppSecret) missing.push("App Secret");
+  if (!options.detailFeishuUrl) missing.push("详情表格链接");
+  return missing.length ? `补足详情还缺：${missing.join("、")}。` : "补足详情需要填写 App ID、App Secret 和详情表格。";
+}
+
 function setSyncSource(nextSource) {
   syncSource = nextSource;
   const isImported = syncSource === "imported";
@@ -146,7 +157,7 @@ function updateCapabilityState() {
   }
 
   if (!detailOk) {
-    detailHint.textContent = "补足详情需要填写 App ID、App Secret 和详情表格。";
+    detailHint.textContent = detailReadinessMessage(options);
   } else if (options.detailFeishuSheetId) {
     detailHint.textContent = "已指定详情子表 ID，将只补足该子表。";
   } else if (detailMultiSheetAvailable) {
@@ -393,6 +404,14 @@ async function stopDetail() {
 }
 
 for (const input of Object.values(fields)) {
+  input.addEventListener("input", () => {
+    if (input === fields.detailFeishuUrl || input === fields.detailFeishuSheetId) {
+      detailMultiSheetAvailable = false;
+      detailTraverseAllSheets.checked = false;
+    }
+    updateCapabilityState();
+  });
+
   input.addEventListener("change", () => {
     if (input === fields.detailFeishuUrl || input === fields.detailFeishuSheetId) {
       detailMultiSheetAvailable = false;

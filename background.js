@@ -42,7 +42,9 @@ let tokenCache = {
 
 let detailStopRequested = false;
 let detailCaptureLock = Promise.resolve();
-const DETAIL_BACKFILL_CONCURRENCY = 1;
+let detailOpenTabGate = Promise.resolve();
+const DETAIL_BACKFILL_CONCURRENCY = 2;
+const DETAIL_OPEN_TAB_STAGGER_MS = 1500;
 const DETAIL_REQUEST_DELAY_MIN_MS = 1000;
 const DETAIL_REQUEST_DELAY_MAX_MS = 3000;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 3 * 60 * 1000;
@@ -91,6 +93,9 @@ const STANDARD_FIELDS = [
   "平台报价",
   "图文报价",
   "视频报价",
+  "完播率",
+  "CPM",
+  "CPE",
   "笔记类型",
   "合作订单数",
   "已合作笔记数",
@@ -124,14 +129,14 @@ const FIELD_ALIASES = {
   "粉丝数w": ["粉丝数w", "粉丝量（w）", "followers_w"],
   "获赞与收藏": ["获赞与收藏", "赞藏数", "赞藏量", "liked_collected_count", "likeCollectCountInfo", "likedCollectedCount", "likeCollectCount"],
   "平台报价": ["平台报价", "报价", "合作报价", "图文报价", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice", "price"],
-  "图文报价": ["图文报价", "图文笔记一口价", "图文笔记报价", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice"],
-  "视频报价": ["视频报价", "视频笔记一口价", "video_quote_price", "videoPrice"],
+  "图文报价": ["图文报价", "图文笔记一口价", "图文笔记报价", "图文价格", "报备图文", "报备图文（不含平台服务费）", "报备图文 不含平台服务费", "图文价格（不含平台服务费）", "图文价格 不含平台服务费", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice"],
+  "视频报价": ["视频报价", "视频笔记一口价", "视频笔记报价", "视频价格", "报备视频价格", "报备视频价格（不含平台服务费）", "报备视频价格 不含平台服务费", "视频价格（不含平台服务费）", "视频价格 不含平台服务费", "video_quote_price", "videoPrice"],
   "笔记类型": ["笔记类型", "内容形式", "note_type", "noteType", "contentType"],
   "合作订单数": ["合作订单数", "已合作订单数", "商单数", "商业笔记数", "cooperation_order_count", "progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt"],
   "已合作笔记数": ["已合作笔记数", "已合作笔记", "合作笔记数", "商业笔记数", "cooperation_note_count", "businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d", "progressOrderCnt"],
-  "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "预估曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
-  "阅读中位数（日常）": ["阅读中位数（日常）", "日常阅读中位数", "平均阅读量", "达人历史平均阅读量", "达人历史/平均阅读量", "达人历史 平均阅读量", "平均播放量/阅读量", "达人历史平均曝光量/阅读量/互动总量", "daily_read_median", "clickMidNum", "readMedian", "readMedianNum"],
-  "互动中位数（日常）": ["互动中位数（日常）", "日常互动中位数", "预估互动", "平均互动量", "达人历史平均曝光量/阅读量/互动总量", "daily_interaction_median", "mEngagementNum", "mengagementNum", "interactionMedian"],
+  "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "曝光量", "预估曝光量", "达人历史平均曝光量", "达人历史 平均曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
+  "阅读中位数（日常）": ["阅读中位数（日常）", "阅读中位数", "日常阅读中位数", "阅读量", "平均阅读量", "达人历史平均阅读量", "达人历史/平均阅读量", "达人历史 平均阅读量", "平均播放量/阅读量", "达人历史平均曝光量/阅读量/互动总量", "daily_read_median", "clickMidNum", "readMedian", "readMedianNum"],
+  "互动中位数（日常）": ["互动中位数（日常）", "日常互动中位数", "互动", "预估互动", "平均互动量", "达人历史平均互动总量", "达人历史 平均互动总量", "达人历史平均曝光量/阅读量/互动总量", "daily_interaction_median", "mEngagementNum", "mengagementNum", "interactionMedian"],
   "曝光中位数（合作）": ["曝光中位数（合作）", "合作曝光中位数", "cooperation_exposure_median", "accumCoopImpMedinNum30d"],
   "阅读中位数（合作）": ["阅读中位数（合作）", "合作阅读中位数", "cooperation_read_median", "readMidCoop30"],
   "互动中位数（合作）": ["互动中位数（合作）", "合作互动中位数", "cooperation_interaction_median", "interMidCoop30"],
@@ -139,6 +144,9 @@ const FIELD_ALIASES = {
   "图文预估互动单价": ["图文预估互动单价", "图文笔记互动单价", "image_interaction_unit_price", "estimatePictureEngageCost", "pictureInteractionUnitPrice", "imageInteractionUnitPrice"],
   "视频预估阅读单价": ["视频预估阅读单价", "视频笔记阅读单价", "video_read_unit_price", "videoReadCost", "videoReadCostV2", "videoReadUnitPrice"],
   "视频预估互动单价": ["视频预估互动单价", "视频笔记互动单价", "video_interaction_unit_price", "estimateVideoEngageCost", "videoInteractionUnitPrice"],
+  "完播率": ["完播率", "视频完播率", "视频播放完成率", "video_completion_rate", "videoFullViewRate"],
+  "CPM": ["CPM", "cpm"],
+  "CPE": ["CPE", "cpe", "互动成本", "互动单价"],
   "邀约48h回复率": ["邀约48h回复率", "邀约48小时回复率", "回复率", "reply_rate_48h", "inviteReply48hNumRatio", "responseRate", "replyRate48h"],
   "账号类型": ["账号类型", "达人类型", "博主类目", "creator_type", "categoryName", "category"],
   "IP城市": ["IP城市", "城市", "地域", "ip_city", "location", "city"],
@@ -358,6 +366,9 @@ function normalizeExportRow(row) {
     "平台报价": numericValue(valueByAliases(row, "平台报价")),
     "图文报价": numericValue(valueByAliases(row, "图文报价")),
     "视频报价": numericValue(valueByAliases(row, "视频报价")),
+    "完播率": valueByAliases(row, "完播率"),
+    "CPM": numericValue(valueByAliases(row, "CPM")),
+    "CPE": numericValue(valueByAliases(row, "CPE")),
     "笔记类型": valueByAliases(row, "笔记类型") || fallbackNoteTypeValue(row),
     "合作订单数": numericValue(valueByAliases(row, "合作订单数") || fallbackCooperationOrderValue(row)),
     "已合作笔记数": numericValue(valueByAliases(row, "已合作笔记数") || fallbackCooperationNoteValue(row)),
@@ -861,7 +872,7 @@ function canonicalFieldForHeader(header) {
     for (const alias of aliases || []) {
       const aliasKey = normalizeKey(alias);
       if (!aliasKey) continue;
-      if (aliasKey === normalized || normalized.includes(aliasKey) || aliasKey.includes(normalized)) return fieldName;
+      if (aliasKey === normalized || normalized.includes(aliasKey)) return fieldName;
     }
   }
   return "";
@@ -949,6 +960,28 @@ function readMetricValue(valuesByField) {
   return "";
 }
 
+function firstNumericField(valuesByField, fieldNames) {
+  for (const fieldName of fieldNames) {
+    const value = numericValue(valueForCanonicalField(valuesByField, fieldName));
+    if (typeof value === "number" && Number.isFinite(value) && value > 0) return value;
+  }
+  return 0;
+}
+
+function computedValueForCanonicalField(valuesByField, canonicalField) {
+  if (canonicalField === "CPM") {
+    const price = firstNumericField(valuesByField, ["图文报价", "视频报价", "平台报价"]);
+    const exposure = firstNumericField(valuesByField, ["曝光中位数（日常）", "曝光中位数（合作）"]);
+    return price && exposure ? Math.round((price / exposure) * 1000 * 100) / 100 : "";
+  }
+  if (canonicalField === "CPE") {
+    const price = firstNumericField(valuesByField, ["图文报价", "视频报价", "平台报价"]);
+    const interaction = firstNumericField(valuesByField, ["互动中位数（日常）", "互动中位数（合作）"]);
+    return price && interaction ? Math.round((price / interaction) * 100) / 100 : "";
+  }
+  return "";
+}
+
 function canonicalBackfillValues(sourceRow, payload) {
   const captures = payload.captures || {};
   const userId = extractPgyUserId(sourceRow);
@@ -972,15 +1005,31 @@ function valueForCanonicalField(valuesByField, canonicalField) {
   for (const alias of aliases) {
     if (valuesByField[alias] !== undefined && valuesByField[alias] !== null && valuesByField[alias] !== "") return valuesByField[alias];
   }
-  return "";
+  return computedValueForCanonicalField(valuesByField, canonicalField);
 }
 
 function hasBlankMappedDetailCell(item, columns) {
+  const backfillableFields = new Set([
+    ...DETAIL_FIELDS,
+    "达人昵称",
+    "达人名称",
+    "主页链接",
+    "蒲公英链接",
+    "小红书号",
+    "粉丝数",
+    "粉丝数w",
+    "图文报价",
+    "视频报价",
+    "曝光中位数（日常）",
+    "阅读中位数（日常）",
+    "互动中位数（日常）",
+    "完播率",
+    "CPM",
+    "CPE"
+  ]);
   return columns.some((column) => {
     if (!column.canonicalField) return false;
-    if (!DETAIL_FIELDS.includes(column.canonicalField) && !["达人昵称", "达人名称", "主页链接", "蒲公英链接", "小红书号", "粉丝数", "粉丝数w"].includes(column.canonicalField)) {
-      return false;
-    }
+    if (!backfillableFields.has(column.canonicalField)) return false;
     return !nonEmptyCell(item.line[column.columnIndex]);
   });
 }
@@ -1804,6 +1853,20 @@ async function withDetailCaptureLock(task) {
   }
 }
 
+async function withDetailOpenTabStagger(task) {
+  const previous = detailOpenTabGate;
+  let release;
+  detailOpenTabGate = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    setTimeout(release, DETAIL_OPEN_TAB_STAGGER_MS);
+  }
+}
+
 function screenshotClipFromPrepared(prepared) {
   const rect = prepared?.pageRect;
   if (!rect) return null;
@@ -1977,7 +2040,7 @@ async function collectDetailPayload(row, index) {
   if (!url) throw new Error("该行缺少蒲公英达人链接或达人ID。");
   const currentTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   const previousTabId = currentTabs[0]?.id;
-  const tab = await chrome.tabs.create({ url, active: !DETAIL_HEADLESS_MODE });
+  const tab = await withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: !DETAIL_HEADLESS_MODE }));
   let keepTabOpen = false;
   try {
     await waitForTabComplete(tab.id);
