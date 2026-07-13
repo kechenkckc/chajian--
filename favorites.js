@@ -8,6 +8,8 @@ const clearBtn = document.getElementById("clearBtn");
 const selectAll = document.getElementById("selectAll");
 const selectedCount = document.getElementById("selectedCount");
 const writeFeishuBtn = document.getElementById("writeFeishuBtn");
+const favoriteConfiguredTable = document.getElementById("favoriteConfiguredTable");
+const activeWriteTarget = document.getElementById("activeWriteTarget");
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
 const categoryFilters = document.getElementById("categoryFilters");
@@ -45,6 +47,151 @@ let favorites = [];
 let selectedUserIds = new Set();
 let writing = false;
 let activeCategory = "";
+let configuredTables = [];
+let activeTable = null;
+
+function normalizeTableConfigs(configs) {
+  return (Array.isArray(configs) ? configs : [])
+    .map((item) => ({
+      name: String(item?.name || "").trim(),
+      url: String(item?.url || "").trim(),
+      sheetId: String(item?.sheetId || item?.tableId || "").trim(),
+      tableName: String(item?.tableName || "").trim(),
+      sheetName: String(item?.sheetName || "").trim()
+    }))
+    .filter((item) => item.url);
+}
+
+function configuredTableValue(config) {
+  return writeTargetKey(config.url, config.sheetId);
+}
+
+function writeTargetKey(url, sheetId) {
+  return JSON.stringify([String(url || "").trim(), String(sheetId || "").trim()]);
+}
+
+function configuredTableLabel(config, index) {
+  const remark = config.name || `配置 ${index + 1}`;
+  const target = [config.tableName, config.sheetName].filter(Boolean).join(" / ");
+  return target ? `${remark}（${target}）` : remark;
+}
+
+function normalizeWriteHistory(value, legacyStatus = "") {
+  const history = (Array.isArray(value) ? value : [])
+    .map((entry) => {
+      const url = String(entry?.url || "").trim();
+      const sheetId = String(entry?.sheetId || "").trim();
+      const key = url || sheetId
+        ? writeTargetKey(url, sheetId)
+        : String(entry?.key || "").trim();
+      return {
+        key,
+        url,
+        sheetId,
+        label: String(entry?.label || "已配置表格").trim(),
+        writtenAt: String(entry?.writtenAt || entry?.updatedAt || "").trim()
+      };
+    })
+    .filter((entry) => entry.key);
+  if (!history.length && legacyStatus === "已写入飞书") {
+    history.push({ key: "legacy-unknown", url: "", sheetId: "", label: "旧记录（表格未知）", writtenAt: "" });
+  }
+  return history.filter((entry, index) => history.findIndex((candidate) => candidate.key === entry.key) === index);
+}
+
+function renderFeishuStatusOptions() {
+  const previous = statusFilter.value;
+  const targets = new Map();
+  favorites.forEach((item) => {
+    (item.feishuWriteHistory || []).forEach((entry) => targets.set(entry.key, entry.label || "已配置表格"));
+  });
+  configuredTables.forEach((config, index) => targets.set(configuredTableValue(config), configuredTableLabel(config, index)));
+  statusFilter.textContent = "";
+  const baseOptions = [
+    ["", "全部飞书状态"],
+    ["never", "未写回过"],
+    ["any", "已写回过任意表格"]
+  ];
+  for (const [value, label] of baseOptions) {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    statusFilter.append(option);
+  }
+  for (const [key, label] of targets) {
+    const option = document.createElement("option");
+    option.value = `table:${key}`;
+    option.textContent = key === "legacy-unknown" ? "已写回：旧记录（表格未知）" : `已写回：${label}`;
+    statusFilter.append(option);
+  }
+  statusFilter.value = Array.from(statusFilter.options).some((option) => option.value === previous) ? previous : "";
+}
+
+function activeTableLabel() {
+  if (!activeTable) return "暂无可写入表格";
+  const index = configuredTables.indexOf(activeTable);
+  return configuredTableLabel(activeTable, Math.max(index, 0));
+}
+
+function updateActiveWriteTarget() {
+  activeWriteTarget.textContent = activeTable
+    ? `当前生效：${activeTableLabel()}`
+    : "当前生效：暂无可写入表格";
+  activeWriteTarget.title = activeTable
+    ? `${activeTableLabel()}\n${activeTable.url}${activeTable.sheetId ? `\n子表 ID：${activeTable.sheetId}` : ""}`
+    : "";
+}
+
+async function loadConfiguredTables({ announce = false } = {}) {
+  const stored = await chrome.storage.local.get({
+    feishuTableConfigs: [],
+    favoriteFeishuUrl: "",
+    favoriteFeishuSheetId: ""
+  });
+  configuredTables = normalizeTableConfigs(stored.feishuTableConfigs);
+  const previousIndex = configuredTables.findIndex((config) => (
+    config.url === String(stored.favoriteFeishuUrl || "").trim()
+    && (config.sheetId || "") === String(stored.favoriteFeishuSheetId || "").trim()
+  ));
+  activeTable = configuredTables[previousIndex >= 0 ? previousIndex : 0] || null;
+  favoriteConfiguredTable.textContent = "";
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = configuredTables.length ? "请选择已配置表格" : "暂无已配置表格";
+  favoriteConfiguredTable.append(placeholder);
+  configuredTables.forEach((config, index) => {
+    const option = document.createElement("option");
+    option.value = configuredTableValue(config);
+    option.textContent = configuredTableLabel(config, index);
+    favoriteConfiguredTable.append(option);
+  });
+  favoriteConfiguredTable.disabled = configuredTables.length === 0;
+  favoriteConfiguredTable.value = activeTable ? configuredTableValue(activeTable) : "";
+  updateActiveWriteTarget();
+  renderFeishuStatusOptions();
+  const nextUrl = activeTable?.url || "";
+  const nextSheetId = activeTable?.sheetId || "";
+  if (nextUrl !== (stored.favoriteFeishuUrl || "") || nextSheetId !== (stored.favoriteFeishuSheetId || "")) {
+    await chrome.storage.local.set({ favoriteFeishuUrl: nextUrl, favoriteFeishuSheetId: nextSheetId });
+  }
+  updateSelectionState();
+  if (announce) setStatus(activeTable
+    ? `写入表格已更新，当前生效：${activeTableLabel()}。`
+    : "飞书配置页暂无可用表格，请先添加并保存配置。", !activeTable);
+}
+
+async function applyConfiguredTableSelection() {
+  activeTable = configuredTables.find((config) => configuredTableValue(config) === favoriteConfiguredTable.value) || null;
+  updateActiveWriteTarget();
+  await chrome.storage.local.set({
+    favoriteFeishuUrl: activeTable?.url || "",
+    favoriteFeishuSheetId: activeTable?.sheetId || ""
+  });
+  updateSelectionState();
+  setStatus(activeTable
+    ? `选择已生效，预收藏达人将写入：${activeTableLabel()}。`
+    : "当前没有可写入的飞书表格。", !activeTable);
+}
 
 function setStatus(text, isError = false) {
   statusNode.textContent = text;
@@ -140,7 +287,8 @@ function normalizeFavorites(items) {
       pgyUrl: String(item?.pgyUrl || "").trim(),
       status: String(item?.status || "预收藏").trim(),
       createdAt: String(item?.createdAt || "").trim(),
-      updatedAt: String(item?.updatedAt || "").trim()
+      updatedAt: String(item?.updatedAt || "").trim(),
+      feishuWriteHistory: normalizeWriteHistory(item?.feishuWriteHistory, String(item?.status || "").trim())
     }))
     .filter((item) => item.userId);
 }
@@ -163,6 +311,7 @@ function favoriteSearchText(item) {
     item.quoteStatus,
     item.bio,
     item.status,
+    ...(item.feishuWriteHistory || []).map((entry) => entry.label),
     ...(item.categoryTags || [])
   ].join(" ").toLowerCase();
 }
@@ -171,7 +320,10 @@ function filteredFavorites() {
   const keyword = String(searchInput.value || "").trim().toLowerCase();
   const status = statusFilter.value;
   return favorites.filter((item) => {
-    if (status && item.status !== status) return false;
+    const writeHistory = item.feishuWriteHistory || [];
+    if (status === "never" && writeHistory.length) return false;
+    if (status === "any" && !writeHistory.length) return false;
+    if (status.startsWith("table:") && !writeHistory.some((entry) => entry.key === status.slice(6))) return false;
     if (activeCategory === "未分类" && (item.categoryTags || []).length) return false;
     if (activeCategory && activeCategory !== "未分类" && !(item.categoryTags || []).includes(activeCategory)) return false;
     if (keyword && !favoriteSearchText(item).includes(keyword)) return false;
@@ -216,7 +368,7 @@ function updateSelectionState() {
   const visibleSelected = visibleIds.filter((userId) => selectedUserIds.has(userId)).length;
   const selected = selectedUserIds.size;
   selectedCount.textContent = `已选 ${selected} 位`;
-  writeFeishuBtn.disabled = writing || selected === 0;
+  writeFeishuBtn.disabled = writing || selected === 0 || !activeTable;
   clearBtn.disabled = writing || favorites.length === 0;
   selectAll.disabled = writing || visible.length === 0;
   selectAll.checked = visible.length > 0 && visibleSelected === visible.length;
@@ -244,6 +396,7 @@ function renderEmpty() {
 }
 
 function renderFavorites() {
+  renderFeishuStatusOptions();
   renderCategoryFilters();
   const visibleFavorites = filteredFavorites();
   favoriteCount.textContent = String(favorites.length);
@@ -263,6 +416,13 @@ function renderFavorites() {
     const xhsUrl = item.xhsUrl || `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(item.userId)}`;
     const tags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
     const quoteStatus = item.quoteStatus || (!item.picturePriceText && !item.videoPriceText ? "报价待补充" : "");
+    const writeHistory = item.feishuWriteHistory || [];
+    const writeHistoryHtml = writeHistory.length ? `
+      <div class="write-history">
+        <span class="write-history-label">已写入</span>
+        ${writeHistory.map((entry) => `<span class="write-history-item" title="${escapeHtml(`${entry.label}${entry.writtenAt ? ` · ${formatTime(entry.writtenAt)}` : ""}`)}">${escapeHtml(entry.label)}</span>`).join("")}
+      </div>
+    ` : "";
     return `
       <article class="favorite-card" data-user-id="${escapeHtml(item.userId)}">
         <input class="favorite-select" type="checkbox" aria-label="选择 ${escapeHtml(name)}" ${selectedUserIds.has(item.userId) ? "checked" : ""} />
@@ -285,6 +445,7 @@ function renderFavorites() {
             <div><span>视频报价</span><strong>${escapeHtml(item.videoPriceText || "待补充")}</strong></div>
           </div>
           ${item.bio ? `<div class="bio">${escapeHtml(item.bio)}</div>` : ""}
+          ${writeHistoryHtml}
           <div class="meta">${escapeHtml(item.status || "预收藏")} · 收藏 ${escapeHtml(formatTime(item.createdAt))}${quoteStatus ? ` · ${escapeHtml(quoteStatus)}` : ""}</div>
         </div>
         <div class="card-actions">
@@ -350,18 +511,20 @@ async function syncSelectedToFeishu() {
   const options = await chrome.storage.local.get({
     feishuAppId: "",
     feishuAppSecret: "",
-    feishuUrl: "",
-    feishuSheetId: "",
     syncUpdateExisting: false,
     syncUseFirstSheet: false
   });
-  if (!options.feishuAppId || !options.feishuAppSecret || !options.feishuUrl) {
-    throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和同步达人飞书表格。");
+  if (!activeTable) throw new Error("请先选择要写入的已配置飞书表格。");
+  options.feishuUrl = activeTable.url;
+  options.feishuSheetId = activeTable.sheetId || "";
+  if (!options.feishuAppId || !options.feishuAppSecret) {
+    throw new Error("请先在飞书配置页填写 App ID 和 App Secret。");
   }
 
   writing = true;
   updateSelectionState();
-  setStatus(`正在写入 ${targets.length} 位预收藏达人到飞书...`);
+  const targetLabel = activeTableLabel();
+  setStatus(`正在写入 ${targets.length} 位预收藏达人到「${targetLabel}」...`);
   try {
     const rows = targets.map(favoriteToFeishuRow);
     const result = await chrome.runtime.sendMessage({ type: "SYNC_FEISHU_DIRECT", rows, options });
@@ -369,14 +532,28 @@ async function syncSelectedToFeishu() {
     const now = new Date().toISOString();
     const targetIds = new Set(targets.map((item) => item.userId));
     await saveFavorites(favorites.map((item) => targetIds.has(item.userId)
-      ? { ...item, status: "已写入飞书", updatedAt: now }
+      ? {
+          ...item,
+          status: "已写入飞书",
+          updatedAt: now,
+          feishuWriteHistory: [
+            ...(item.feishuWriteHistory || []).filter((entry) => entry.key !== configuredTableValue(activeTable)),
+            {
+              key: configuredTableValue(activeTable),
+              url: activeTable.url,
+              sheetId: activeTable.sheetId || "",
+              label: targetLabel,
+              writtenAt: now
+            }
+          ]
+        }
       : item
     ));
     const parts = [];
     if (result.appendedCount !== undefined) parts.push(`新增 ${result.appendedCount}`);
     if (result.updatedCount !== undefined) parts.push(`更新 ${result.updatedCount}`);
     if (result.skippedCount !== undefined) parts.push(`跳过 ${result.skippedCount}`);
-    setStatus(`写入完成：${parts.length ? parts.join("，") : `处理 ${targets.length}`}。`);
+    setStatus(`已写入「${targetLabel}」：${parts.length ? parts.join("，") : `处理 ${targets.length}`}。`);
   } finally {
     writing = false;
     updateSelectionState();
@@ -428,14 +605,20 @@ writeFeishuBtn.addEventListener("click", () => syncSelectedToFeishu().catch((err
   updateSelectionState();
   setStatus(error.message, true);
 }));
+favoriteConfiguredTable.addEventListener("change", () => applyConfiguredTableSelection().catch((error) => setStatus(error.message, true)));
 
 refreshBtn.addEventListener("click", () => loadFavorites().catch((error) => setStatus(error.message, true)));
 clearBtn.addEventListener("click", () => clearFavorites().catch((error) => setStatus(error.message, true)));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (areaName !== "local" || !changes[STORAGE_KEY]) return;
-  favorites = normalizeFavorites(changes[STORAGE_KEY].newValue);
-  renderFavorites();
+  if (areaName !== "local") return;
+  if (changes[STORAGE_KEY]) {
+    favorites = normalizeFavorites(changes[STORAGE_KEY].newValue);
+    renderFavorites();
+  }
+  if (changes.feishuTableConfigs) {
+    loadConfiguredTables({ announce: true }).catch((error) => setStatus(error.message, true));
+  }
 });
 
-loadFavorites().catch((error) => setStatus(error.message, true));
+Promise.all([loadFavorites(), loadConfiguredTables()]).catch((error) => setStatus(error.message, true));

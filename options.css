@@ -272,6 +272,68 @@ label > span {
   overflow-wrap: anywhere;
 }
 
+.table-config-save {
+  display: none;
+  grid-column: 1 / -1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding-top: 12px;
+  border-top: 1px dashed rgba(36, 93, 60, 0.22);
+}
+
+.table-config-save.is-visible {
+  display: flex;
+}
+
+.table-config-save .default-table-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 8px 11px;
+  border: 1px solid rgba(36, 93, 60, 0.2);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.7);
+  cursor: pointer;
+}
+
+.default-table-choice input {
+  flex: 0 0 auto;
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--forest);
+}
+
+.default-table-choice span {
+  color: var(--forest-deep);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.table-save-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.saved-table-badge {
+  display: none;
+  color: var(--ok);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.saved-table-badge.is-visible {
+  display: inline-flex;
+}
+
+.table-config-save button {
+  min-width: 138px;
+}
+
 label {
   display: grid;
   gap: 6px;
@@ -429,6 +491,15 @@ button.danger:hover {
   .detected-table-info,
   .status-grid {
     grid-template-columns: 1fr;
+  }
+
+  .table-config-save {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .table-save-action {
+    justify-content: space-between;
   }
 
   .actions {

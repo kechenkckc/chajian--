@@ -165,11 +165,11 @@
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   }
 
-  function exportCsvFilename(count) {
+  function exportXlsxFilename(count) {
     const now = new Date();
     const part = (value) => String(value).padStart(2, "0");
     const time = `${now.getFullYear()}-${part(now.getMonth() + 1)}-${part(now.getDate())}-${part(now.getHours())}-${part(now.getMinutes())}-${part(now.getSeconds())}`;
-    return `蒲公英达人导出-${Number(count || 0)}人-${time}.csv`;
+    return `蒲公英达人导出-${Number(count || 0)}人-${time}.xlsx`;
   }
 
   async function exportAll({ download = true, enrichDetails = false } = {}) {
@@ -228,9 +228,9 @@
       }
       if (download && latestRows.length) {
         await chrome.runtime.sendMessage({
-          type: "DOWNLOAD_PGY_CSV",
+          type: "DOWNLOAD_PGY_XLSX",
           rows: latestRows,
-          filename: exportCsvFilename(latestRows.length)
+          filename: exportXlsxFilename(latestRows.length)
         });
       }
       finishExportTask({

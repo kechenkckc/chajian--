@@ -36,11 +36,11 @@
             <input id="searchInput" type="search" placeholder="昵称、红书号、地区、简介" />
           </label>
           <label class="status-field">
-            <span>状态</span>
+            <span>飞书状态</span>
             <select id="statusFilter">
-              <option value="">全部状态</option>
-              <option value="预收藏">预收藏</option>
-              <option value="已写入飞书">已写入飞书</option>
+              <option value="">全部飞书状态</option>
+              <option value="never">未写回过</option>
+              <option value="any">已写回过任意表格</option>
             </select>
           </label>
         </div>
@@ -55,6 +55,15 @@
           <input id="selectAll" type="checkbox" />
           <span>全选当前筛选结果</span>
         </label>
+        <div class="write-target">
+          <label>
+            <span>写入已配置表格</span>
+            <select id="favoriteConfiguredTable">
+              <option value="">暂无已配置表格</option>
+            </select>
+          </label>
+          <p id="activeWriteTarget" class="active-write-target">当前生效：暂无可写入表格</p>
+        </div>
         <div class="write-actions">
           <span id="selectedCount">已选 0 位</span>
           <button id="writeFeishuBtn" type="button" class="primary" disabled>写入飞书表格</button>

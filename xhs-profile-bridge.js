@@ -6,7 +6,6 @@
   const DETAIL_BUTTON_ID = "pgy-xhs-profile-bridge";
   const FAVORITE_BUTTON_ID = "pgy-xhs-profile-favorite";
   const FLOAT_CLASS = "pgy-xhs-profile-bridge-floating";
-  const INLINE_CLASS = "pgy-xhs-profile-bridge-inline";
   const DETAIL_BASE = "https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/";
   const USER_ID_RE = /\/user\/profile\/([^/?#]+)/;
 
@@ -15,6 +14,7 @@
   let observer = null;
   let cachedProfileUserId = "";
   let cachedProfileAvatar = null;
+  let cachedProfileAnchor = null;
 
   function currentXhsUserId() {
     const match = location.pathname.match(USER_ID_RE);
@@ -144,7 +144,15 @@
     const existingIndex = favorites.findIndex((item) => item.userId === record.userId);
     const next = [...favorites];
     if (existingIndex >= 0) {
-      next[existingIndex] = { ...next[existingIndex], ...record, createdAt: next[existingIndex].createdAt || record.createdAt };
+      const existing = next[existingIndex];
+      next[existingIndex] = {
+        ...existing,
+        ...record,
+        status: existing.status === "已写入飞书" || (Array.isArray(existing.feishuWriteHistory) && existing.feishuWriteHistory.length)
+          ? "已写入飞书"
+          : record.status,
+        createdAt: existing.createdAt || record.createdAt
+      };
     } else {
       next.unshift(record);
     }
@@ -200,6 +208,7 @@
     if (cachedProfileUserId !== userId) {
       cachedProfileUserId = userId;
       cachedProfileAvatar = null;
+      cachedProfileAnchor = null;
     }
     if (cachedProfileAvatar?.isConnected) return cachedProfileAvatar;
     cachedProfileAvatar = findAvatar();
@@ -266,7 +275,7 @@
     if (bar) return bar;
     bar = document.createElement("div");
     bar.id = BAR_ID;
-    bar.className = INLINE_CLASS;
+    bar.className = FLOAT_CLASS;
     bar.append(createDetailButton(), createFavoriteButton(), createFavoritesPageButton());
     return bar;
   }
@@ -279,35 +288,23 @@
     button.querySelector("strong").textContent = saved ? "已预收藏" : "预收藏";
   }
 
-  function inlineContainerForAvatar(avatar) {
-    const candidates = [];
-    let node = avatar.parentElement;
-    for (let depth = 0; node && depth < 7; depth += 1) {
-      candidates.push(node);
-      node = node.parentElement;
+  function placeAtProfileHeader(bar, avatar) {
+    if (!cachedProfileAnchor) {
+      const rect = avatar.getBoundingClientRect();
+      cachedProfileAnchor = {
+        left: window.scrollX + rect.left,
+        top: window.scrollY + rect.top,
+        height: rect.height
+      };
     }
-    return candidates.find((item) => {
-      const rect = visibleRect(item);
-      if (!rect) return false;
-      if (rect.width < 180 || rect.width > 1800) return false;
-      if (rect.height < 90 || rect.height > 560) return false;
-      const style = getComputedStyle(item);
-      if (!style.display.includes("flex") && !style.display.includes("grid")) return false;
-      const avatarRect = avatar.getBoundingClientRect();
-      return Math.abs(rect.top - avatarRect.top) < 80;
-    }) || null;
-  }
-
-  function placeInline(bar, avatar) {
-    const container = inlineContainerForAvatar(avatar);
-    if (!container) return false;
-    bar.className = INLINE_CLASS;
-    bar.style.left = "";
-    bar.style.top = "";
-    bar.style.position = "";
-    const avatarBlock = avatar.parentElement;
-    if (bar.parentElement !== container) container.insertBefore(bar, avatarBlock || avatar);
-    return true;
+    const width = 126;
+    const left = Math.max(16, Math.round(cachedProfileAnchor.left - width - 38));
+    const top = Math.max(88, Math.round(cachedProfileAnchor.top + cachedProfileAnchor.height / 2 - 54));
+    bar.className = FLOAT_CLASS;
+    bar.style.left = `${left}px`;
+    bar.style.top = `${top}px`;
+    bar.style.position = "absolute";
+    if (bar.parentElement !== document.body) document.body.append(bar);
   }
 
   function renderBridge() {
@@ -322,10 +319,7 @@
       bar.remove();
       return;
     }
-    if (!placeInline(bar, avatar)) {
-      bar.remove();
-      return;
-    }
+    placeAtProfileHeader(bar, avatar);
     updateFavoriteState();
   }
 

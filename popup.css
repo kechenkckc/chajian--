@@ -177,6 +177,18 @@ h2::before {
   margin-bottom: 12px;
 }
 
+.configured-table-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 8px;
+}
+
+.compact-button {
+  min-height: 39px;
+  white-space: nowrap;
+}
+
 .hint,
 .supporting,
 .note {
@@ -385,6 +397,7 @@ select:disabled {
   .grid,
   .split,
   .check-grid,
+  .configured-table-picker,
   .actions {
     grid-template-columns: 1fr;
   }

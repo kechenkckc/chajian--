@@ -11,6 +11,7 @@ const DETAIL_FIELDS = [
   "博主优势",
   "粉丝画像截图",
   "笔记数据截图",
+  "博主类型",
   "粉丝画像文本",
   "笔记数据文本",
   "女性粉丝占比",
@@ -151,6 +152,7 @@ const FIELD_ALIASES = {
   "图文报价": ["图文报价", "图文笔记一口价", "图文笔记一口价(含平台服务费)", "图文笔记报价", "图文价格", "图文裸价", "报备图文", "报备图文裸价", "报备图文价格", "报备图文（不含平台服务费）", "报备图文 不含平台服务费", "图文价格（不含平台服务费）", "图文价格 不含平台服务费", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice"],
   "视频报价": ["视频报价", "视频笔记一口价", "视频笔记一口价(含平台服务费)", "视频笔记报价", "视频价格", "视频裸价", "报备视频裸价", "报备视频价格", "报备视频价格（不含平台服务费）", "报备视频价格 不含平台服务费", "视频价格（不含平台服务费）", "视频价格 不含平台服务费", "video_quote_price", "videoPrice"],
   "笔记类型": ["笔记类型", "内容形式", "note_type", "noteType", "contentType"],
+  "博主类型": ["博主类型", "达人类型", "内容类型", "达人主类型", "账号主类型", "内容主类型", "主要内容形式", "主要笔记形式", "主发形式", "主发类型", "作品形式", "发布形式", "图文/视频", "图文或视频", "creator_type", "blogger_type", "primary_note_type", "primary_content_type"],
   "合作订单数": ["合作订单数", "已合作订单数", "商单数", "商业笔记数", "cooperation_order_count", "progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt"],
   "已合作笔记数": ["已合作笔记数", "已合作笔记", "合作笔记数", "商业笔记数", "cooperation_note_count", "businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d", "progressOrderCnt"],
   "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "曝光量", "预估曝光量", "达人历史平均曝光量", "达人历史 平均曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
@@ -168,7 +170,7 @@ const FIELD_ALIASES = {
   "CPM": ["CPM", "cpm", "CPM（视频）", "CPM（图文）", "视频CPM", "图文CPM", "estimatePictureCpm", "estimateVideoCpm"],
   "CPE": ["CPE", "cpe", "互动成本", "互动单价", "CPE（视频）", "CPE（图文）", "视频CPE", "图文CPE"],
   "邀约48h回复率": ["邀约48h回复率", "邀约48小时回复率", "回复率", "reply_rate_48h", "inviteReply48hNumRatio", "responseRate", "replyRate48h"],
-  "账号类型": ["账号类型", "达人类型", "达人标签", "博主类目", "博主标签", "账号标签", "内容类型", "内容标签", "creator_type", "categoryName", "category", "contentTags", "tradeType", "industryTag", "type"],
+  "账号类型": ["账号类型", "达人标签", "博主类目", "博主标签", "账号标签", "内容标签", "creator_category", "categoryName", "category", "contentTags", "tradeType", "industryTag", "type"],
   "IP城市": ["IP城市", "城市", "地域", "地理位置", "ip_city", "location", "city"],
   "所属机构": ["所属机构", "机构", "MCN", "mcnName", "mcn_name", "agencyName", "organizationName", "orgName", "companyName", "bloggerCompany", "organization_name"],
   "数据来源": ["数据来源", "source"],
@@ -326,6 +328,52 @@ function fallbackNoteTypeValue(row) {
   });
 }
 
+function normalizedCreatorNoteType(value) {
+  if (value === null || value === undefined || value === "") return "";
+  if (typeof value === "boolean") return value ? "视频" : "图文";
+  if (typeof value === "number") {
+    if (value === 1) return "图文";
+    if (value === 2) return "视频";
+  }
+  const text = cellText(value).trim().toLowerCase();
+  if (!text) return "";
+  if (/视频|video|动态/.test(text)) return "视频";
+  if (/图文|图片|image|picture|photo/.test(text)) return "图文";
+  if (/^1(?:\.0+)?$/.test(text)) return "图文";
+  if (/^2(?:\.0+)?$/.test(text)) return "视频";
+  return "";
+}
+
+function noteCaseCreatorType(note) {
+  if (!note || typeof note !== "object") return "";
+  const explicit = firstDefined(note.note_type, note.noteType, note.content_type, note.contentType, note.media_type, note.mediaType, note.type);
+  const normalized = normalizedCreatorNoteType(explicit);
+  if (normalized) return normalized;
+  if (typeof note.isVideo === "boolean") return note.isVideo ? "视频" : "图文";
+  if (typeof note.is_video === "boolean") return note.is_video ? "视频" : "图文";
+  return "";
+}
+
+function creatorTypeFromDetail(detail) {
+  const raw = detail?.raw_payload && typeof detail.raw_payload === "object" ? detail.raw_payload : {};
+  const notes = [raw.note_cases, raw.recent_notes, raw.recent_note_briefs, raw.noteList]
+    .find((items) => Array.isArray(items) && items.length) || [];
+  let pictureCount = 0;
+  let videoCount = 0;
+  let latestType = "";
+  for (const note of notes) {
+    const type = noteCaseCreatorType(note);
+    if (!type) continue;
+    if (!latestType) latestType = type;
+    if (type === "视频") videoCount += 1;
+    if (type === "图文") pictureCount += 1;
+  }
+  if (pictureCount > videoCount) return "图文";
+  if (videoCount > pictureCount) return "视频";
+  if (pictureCount && videoCount) return latestType;
+  return pictureCount ? "图文" : videoCount ? "视频" : "";
+}
+
 function fallbackCooperationOrderValue(row) {
   const raw = row?.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : row;
   return deepFindByKeyPattern(raw, (key) => {
@@ -444,6 +492,160 @@ function exportCsvFilename(count) {
   const part = (value) => String(value).padStart(2, "0");
   const time = `${now.getFullYear()}-${part(now.getMonth() + 1)}-${part(now.getDate())}-${part(now.getHours())}-${part(now.getMinutes())}-${part(now.getSeconds())}`;
   return `蒲公英达人导出-${Number(count || 0)}人-${time}.csv`;
+}
+
+function exportXlsxFilename(count) {
+  return exportCsvFilename(count).replace(/\.csv$/i, ".xlsx");
+}
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+function utf8Bytes(value) {
+  return new TextEncoder().encode(value);
+}
+
+function crc32(bytes) {
+  let crc = 0xffffffff;
+  for (const byte of bytes) {
+    crc ^= byte;
+    for (let index = 0; index < 8; index += 1) crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function zipFiles(files) {
+  const encoder = new TextEncoder();
+  const parts = [];
+  const entries = [];
+  let offset = 0;
+  const append = (value) => {
+    parts.push(value);
+    offset += value.length;
+  };
+  const writeUint16 = (view, position, value) => view.setUint16(position, value, true);
+  const writeUint32 = (view, position, value) => view.setUint32(position, value >>> 0, true);
+
+  for (const file of files) {
+    const name = encoder.encode(file.name);
+    const data = typeof file.content === "string" ? utf8Bytes(file.content) : file.content;
+    const crc = crc32(data);
+    const local = new Uint8Array(30 + name.length);
+    const localView = new DataView(local.buffer);
+    writeUint32(localView, 0, 0x04034b50);
+    writeUint16(localView, 4, 20);
+    writeUint16(localView, 6, 0x0800);
+    writeUint16(localView, 8, 0);
+    writeUint32(localView, 14, crc);
+    writeUint32(localView, 18, data.length);
+    writeUint32(localView, 22, data.length);
+    writeUint16(localView, 26, name.length);
+    local.set(name, 30);
+    append(local);
+    append(data);
+    entries.push({ name, data, crc, offset: offset - local.length - data.length });
+  }
+
+  const centralStart = offset;
+  for (const entry of entries) {
+    const central = new Uint8Array(46 + entry.name.length);
+    const centralView = new DataView(central.buffer);
+    writeUint32(centralView, 0, 0x02014b50);
+    writeUint16(centralView, 4, 20);
+    writeUint16(centralView, 6, 20);
+    writeUint16(centralView, 8, 0x0800);
+    writeUint16(centralView, 10, 0);
+    writeUint32(centralView, 16, entry.crc);
+    writeUint32(centralView, 20, entry.data.length);
+    writeUint32(centralView, 24, entry.data.length);
+    writeUint16(centralView, 28, entry.name.length);
+    writeUint32(centralView, 42, entry.offset);
+    central.set(entry.name, 46);
+    append(central);
+  }
+
+  const end = new Uint8Array(22);
+  const endView = new DataView(end.buffer);
+  writeUint32(endView, 0, 0x06054b50);
+  writeUint16(endView, 8, entries.length);
+  writeUint16(endView, 10, entries.length);
+  writeUint32(endView, 12, offset - centralStart);
+  writeUint32(endView, 16, centralStart);
+  append(end);
+  const size = parts.reduce((total, part) => total + part.length, 0);
+  const archive = new Uint8Array(size);
+  let position = 0;
+  for (const part of parts) {
+    archive.set(part, position);
+    position += part.length;
+  }
+  return archive;
+}
+
+function referenceHeaderMergeRanges() {
+  const rows = referenceExportHeaderRows();
+  const ranges = [];
+  for (let rowIndex = 0; rowIndex < 2; rowIndex += 1) {
+    const row = rows[rowIndex];
+    for (let columnIndex = 0; columnIndex < row.length;) {
+      if (!row[columnIndex]) {
+        columnIndex += 1;
+        continue;
+      }
+      let end = columnIndex + 1;
+      while (end < row.length && !row[end]) end += 1;
+      if (end - columnIndex > 1) {
+        ranges.push(`${columnName(columnIndex + 1)}${rowIndex + 1}:${columnName(end)}${rowIndex + 1}`);
+      }
+      columnIndex = end;
+    }
+  }
+  return ranges;
+}
+
+function xlsxCell(columnIndex, rowIndex, value, styleIndex = 0) {
+  if (value === null || value === undefined || value === "") return "";
+  const ref = `${columnName(columnIndex)}${rowIndex}`;
+  if (typeof value === "number" && Number.isFinite(value)) return `<c r="${ref}" s="${styleIndex}"><v>${value}</v></c>`;
+  if (typeof value === "boolean") return `<c r="${ref}" s="${styleIndex}" t="b"><v>${value ? 1 : 0}</v></c>`;
+  return `<c r="${ref}" s="${styleIndex}" t="inlineStr"><is><t xml:space="preserve">${xmlEscape(cellText(value))}</t></is></c>`;
+}
+
+function columnWidth(column) {
+  const name = cellText(column);
+  if (/(JSON|链接|主页|备注|IP城市|数据来源)/.test(name)) return 24;
+  if (/(添加时间|采集时间)/.test(name)) return 20;
+  if (/(达人|博主|昵称|名称|人设|内容|机构)/.test(name)) return 16;
+  return 14;
+}
+
+function rowsToXlsx(rows) {
+  const headers = referenceExportHeaderRows();
+  const columns = REFERENCE_EXPORT_COLUMNS;
+  const rowXml = headers.map((row, rowIndex) => `<row r="${rowIndex + 1}" ht="24" customHeight="1">${row.map((value, columnIndex) => xlsxCell(columnIndex + 1, rowIndex + 1, value, 1)).join("")}</row>`);
+  rows.forEach((row, rowIndex) => {
+    const cells = columns.map((column, columnIndex) => xlsxCell(columnIndex + 1, rowIndex + 4, valueForReferenceColumn(row, column), 0)).join("");
+    rowXml.push(`<row r="${rowIndex + 4}">${cells}</row>`);
+  });
+  const merges = referenceHeaderMergeRanges().map((range) => `<mergeCell ref="${range}"/>`).join("");
+  const columnsXml = columns.map((column, index) => `<col min="${index + 1}" max="${index + 1}" width="${columnWidth(column)}" customWidth="1"/>`).join("");
+  const lastColumn = columnName(columns.length);
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="3" topLeftCell="A4" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>${columnsXml}</cols><sheetData>${rowXml.join("")}</sheetData><mergeCells count="${referenceHeaderMergeRanges().length}">${merges}</mergeCells><autoFilter ref="A3:${lastColumn}${Math.max(3, rows.length + 3)}"/></worksheet>`;
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Arial"/></font><font><b/><sz val="10"/><name val="Arial"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD9E1F2"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"><color auto="1"/></left><right style="thin"><color auto="1"/></right><top style="thin"><color auto="1"/></top><bottom style="thin"><color auto="1"/></bottom><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1" xfId="0"><alignment horizontal="center" vertical="center"/></xf></cellXfs></styleSheet>`;
+  return zipFiles([
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="达人数据" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: "xl/styles.xml", content: stylesXml },
+    { name: "xl/worksheets/sheet1.xml", content: sheetXml }
+  ]);
 }
 
 function columnName(index) {
@@ -1394,6 +1596,12 @@ function semanticCanonicalFieldForHeader(header, context = "") {
   if (has(/合作|商单|订单|order/i) && has(/数|量|count|cnt/i)) return "合作订单数";
   if (has(/合作|商单|商业/) && has(/笔记|note/) && has(/数|量|count|cnt/i)) return "已合作笔记数";
   if (has(/回复率|48h|48小时|response|reply/i)) return "邀约48h回复率";
+  const creatorTypeSubject = has(/博主|达人|账号|作者|创作者|creator|blogger|kol/i);
+  const creatorTypeMeaning = has(/主类型|主要类型|主发|主做|主攻|内容形式|笔记形式|作品形式|发布形式|媒介形式|图文.?视频|图文或视频|图文还是视频|primarycontenttype|primarynotetype/i);
+  const creatorTypeChoice = has(/图文/) && has(/视频/);
+  const creatorTypeExcluded = has(/报价|价格|刊例|裸价|一口价|完播|阅读|播放|曝光|互动|单价|成本|比例|占比|数据|截图|json/i);
+  if (!creatorTypeExcluded && (creatorTypeMeaning || (creatorTypeSubject && creatorTypeChoice))) return "博主类型";
+  if (leafHas(/^(博主类型|达人类型|内容类型)$/i)) return "博主类型";
   if (has(/账号|达人|博主|内容/) && has(/类型|类目|分类|category|type/i)) return "账号类型";
   if (has(/ip|城市|地区|地域|city|location/i) && !has(/分布|distribution/i)) return "IP城市";
 
@@ -1462,7 +1670,8 @@ function canonicalFieldForHeader(header, context = "") {
   if (/(小红书|红书|xhs)/i.test(raw) && /(主页|链接|link|url)/i.test(raw)) return "主页链接";
   if (/(小红书号|红书号|小红书id|red_?id|xhs_?id|redbook_?id|red_book_id|xiaohongshu_?id)/i.test(raw)) return "小红书号";
   if (!unsafeNicknameHeader && /(达人名|达人名称|达人昵称|博主名|博主名称|博主昵称|账号名|账号名称|昵称)/i.test(raw)) return "达人昵称";
-  if (/(账号类型|达人类型|达人标签|博主类目|博主标签|账号标签|账号类目|内容类型|内容标签|内容类目|类目分类|账号分类)/i.test(raw)) return "账号类型";
+  if (/^(博主类型|达人类型|内容类型)$/i.test(headerText.replace(/\s+/g, ""))) return "博主类型";
+  if (/(账号类型|达人标签|博主类目|博主标签|账号标签|账号类目|内容标签|内容类目|类目分类|账号分类)/i.test(raw)) return "账号类型";
   if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw) && /(w|万|量级)/i.test(raw)) return "粉丝数w";
   if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw)) return "粉丝数";
   if (/(图文|图片|笔记)/i.test(raw) && /(报价|价格|裸价|报备|刊例|一口价)/i.test(raw)) return "图文报价";
@@ -1497,6 +1706,34 @@ function canonicalFieldForHeader(header, context = "") {
   return "";
 }
 
+function isAmbiguousCreatorTypeHeader(header) {
+  return /^(博主类型|达人类型|内容类型)$/i.test(cellText(header).replace(/\s+/g, ""));
+}
+
+function creatorTypeFromExampleValue(value) {
+  const text = cellText(value).normalize("NFKC").trim().toLowerCase().replace(/\s+/g, "");
+  if (!text) return "";
+  if (/^(图文|图文为主|图文博主|图片|图片为主|image|picture|photo)$/.test(text)) return "图文";
+  if (/^(视频|视频为主|视频博主|video)$/.test(text)) return "视频";
+  return "";
+}
+
+function firstNonEmptyColumnValue(values, columnIndex, dataStartIndex) {
+  for (let rowIndex = Math.max(0, dataStartIndex); rowIndex < (values || []).length; rowIndex += 1) {
+    const value = values[rowIndex]?.[columnIndex];
+    if (nonEmptyCell(value)) return value;
+  }
+  return "";
+}
+
+function canonicalFieldForSheetColumn(header, context, values, columnIndex, dataStartIndex) {
+  const canonicalField = canonicalFieldForHeader(header, context) || canonicalFieldForHeader(`${context} / ${header}`);
+  if (!isAmbiguousCreatorTypeHeader(header)) return canonicalField;
+  const exampleValue = firstNonEmptyColumnValue(values, columnIndex, dataStartIndex);
+  if (!nonEmptyCell(exampleValue)) return canonicalField;
+  return creatorTypeFromExampleValue(exampleValue) ? "博主类型" : "账号类型";
+}
+
 function buildSheetShape(values, headerRows = 1, startRow = 0) {
   const width = effectiveSheetWidth(values);
   const columns = [];
@@ -1511,7 +1748,8 @@ function buildSheetShape(values, headerRows = 1, startRow = 0) {
     const header = uniqueParts.join(" / ") || `Col${index + 1}`;
     const leafHeader = uniqueParts[uniqueParts.length - 1] || header;
     const contextHeader = uniqueParts.slice(0, -1).join(" / ");
-    const canonicalField = canonicalFieldForHeader(leafHeader, contextHeader) || canonicalFieldForHeader(header);
+    const dataStartIndex = startRow + headerRows;
+    const canonicalField = canonicalFieldForSheetColumn(leafHeader, contextHeader, values, index, dataStartIndex);
     if (canonicalField) mappedCount += 1;
     columns.push({
       fieldName: header,
@@ -1568,9 +1806,10 @@ function firstValidCreatorItem(items) {
   }) || null;
 }
 
-function columnUsesImageTemplate(column, templateItem) {
-  if (!column || !templateItem) return false;
-  return cellLooksLikeImage(templateItem.line?.[column.columnIndex]);
+function columnUsesImageTemplate(column, templateItems) {
+  if (!column || !templateItems) return false;
+  const items = Array.isArray(templateItems) ? templateItems : [templateItems];
+  return items.some((item) => cellLooksLikeImage(item?.line?.[column.columnIndex]));
 }
 
 function rawHeaderCellForColumn(values, shape, column) {
@@ -1599,6 +1838,7 @@ function columnHeaderText(column) {
 
 function isFansImageColumn(column) {
   if (column?.canonicalField === "粉丝画像截图") return true;
+  if (column?.canonicalField) return false;
   const text = columnHeaderText(column);
   if (!/(粉丝画像|粉丝分析|粉丝人群|人群画像)/.test(text)) return false;
   return !/(文本|文字|摘要|JSON|原始|状态|时间|备注|占比|比例|分布|兴趣|地域|城市|设备|年龄|性别)/i.test(text);
@@ -1606,6 +1846,7 @@ function isFansImageColumn(column) {
 
 function isNoteImageColumn(column) {
   if (column?.canonicalField === "笔记数据截图") return true;
+  if (column?.canonicalField) return false;
   const text = columnHeaderText(column);
   if (!/(商单案例|笔记数据|数据概览)/.test(text)) return false;
   return !/(文本|文字|摘要|JSON|原始|状态|时间|备注|阅读量|曝光|互动|点赞|收藏|评论|分享|中位|CPM|CPE|CPR)/i.test(text);
@@ -2157,10 +2398,33 @@ function bitableScreenshotAttachmentField(fields, fieldName) {
   return findBitableFieldByName(fields, fallbackName);
 }
 
-async function ensureBitableDetailFields(token, appToken, tableId) {
+function bitableCreatorTypeFieldName(fields, records) {
+  const ambiguousFields = (fields || []).filter((field) => isAmbiguousCreatorTypeHeader(bitableFieldName(field)));
+  for (const field of ambiguousFields) {
+    const fieldName = bitableFieldName(field);
+    const exampleValue = (records || []).map((record) => record?.fields?.[fieldName]).find(nonEmptyCell);
+    if (creatorTypeFromExampleValue(exampleValue)) return fieldName;
+  }
+  const emptyField = ambiguousFields.find((field) => {
+    const fieldName = bitableFieldName(field);
+    return !(records || []).some((record) => nonEmptyCell(record?.fields?.[fieldName]));
+  });
+  if (emptyField) return bitableFieldName(emptyField);
+  return ambiguousFields.length ? "博主类型（图文/视频）" : "博主类型";
+}
+
+function bitableDetailFieldName(fieldsMeta, canonicalField) {
+  return fieldsMeta?.detailFieldNames?.[canonicalField] || canonicalField;
+}
+
+async function ensureBitableDetailFields(token, appToken, tableId, records = []) {
   let fields = await listBitableFields(token, appToken, tableId);
   const existingNames = new Set(fields.map((field) => bitableFieldName(field)).filter(Boolean));
+  const detailFieldNames = {
+    "博主类型": bitableCreatorTypeFieldName(fields, records)
+  };
   for (const fieldName of DETAIL_FIELDS) {
+    const targetFieldName = detailFieldNames[fieldName] || fieldName;
     if (isBitableScreenshotField(fieldName)) {
       const existing = findBitableFieldByName(fields, fieldName);
       if (existing && isBitableAttachmentField(existing)) continue;
@@ -2172,12 +2436,13 @@ async function ensureBitableDetailFields(token, appToken, tableId) {
       }
       continue;
     }
-    if (!existingNames.has(fieldName)) {
-      const created = await createBitableField(token, appToken, tableId, fieldName, BITABLE_TEXT_FIELD_TYPE);
+    if (!existingNames.has(targetFieldName)) {
+      const created = await createBitableField(token, appToken, tableId, targetFieldName, BITABLE_TEXT_FIELD_TYPE);
       fields.push(created);
-      existingNames.add(fieldName);
+      existingNames.add(targetFieldName);
     }
   }
+  fields.detailFieldNames = detailFieldNames;
   return fields;
 }
 
@@ -2404,7 +2669,7 @@ function bitableNeedsDetail(item, fieldsMeta = [], options = {}) {
     return Boolean(kind) && !nonEmptyCell(item.row[fieldName]);
   });
   if (needsScreenshotAttachment) return true;
-  return DETAIL_FIELDS.some((fieldName) => !nonEmptyCell(item.row[fieldName]));
+  return DETAIL_FIELDS.some((fieldName) => !nonEmptyCell(item.row[bitableDetailFieldName(fieldsMeta, fieldName)]));
 }
 
 function bitableDetailFields(valuesByField, captures) {
@@ -2430,7 +2695,7 @@ function isBitableAttachmentValue(value) {
   return Array.isArray(value) && value.every((item) => item && typeof item === "object" && (item.file_token || item.fileToken));
 }
 
-function bitableBaseDetailFields(valuesByField, captures) {
+function bitableBaseDetailFields(valuesByField, captures, fieldsMeta = []) {
   const fields = {};
   for (const fieldName of DETAIL_FIELDS) {
     if (fieldName === DETAIL_FIELDS[6]) {
@@ -2444,7 +2709,7 @@ function bitableBaseDetailFields(valuesByField, captures) {
       continue;
     }
     const value = valueForCanonicalField(valuesByField, fieldName);
-    if (value !== undefined && value !== null && value !== "") fields[fieldName] = value;
+    if (value !== undefined && value !== null && value !== "") fields[bitableDetailFieldName(fieldsMeta, fieldName)] = value;
   }
   return fields;
 }
@@ -2479,7 +2744,7 @@ async function putBitableScreenshotAttachment(fields, { token, appToken, fieldsM
 }
 
 async function bitableDetailFieldsWithAttachments({ token, appToken, fieldsMeta, valuesByField, captures }) {
-  const fields = bitableBaseDetailFields(valuesByField, captures);
+  const fields = bitableBaseDetailFields(valuesByField, captures, fieldsMeta);
   await putBitableScreenshotAttachment(fields, {
     token,
     appToken,
@@ -3249,6 +3514,7 @@ function detailValuesForSheet(detail, captures, status, note = "") {
     "小红书号": valueOrRaw(detail, "xiaohongshu_id") || fallbackRedIdValue(detail),
     "个人简介": valueOrRaw(detail, "personal_intro"),
     "博主优势": valueOrRaw(detail, "blogger_advantage"),
+    "博主类型": creatorTypeFromDetail(detail),
     "粉丝画像文本": captures.audience?.text || "",
     "笔记数据文本": captures.overview?.text || "",
     "中位点赞量": valueOrRaw(detail, "like_median"),
@@ -4248,7 +4514,8 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
 async function appendDetailPayloadToBitable(target, payload) {
   const tableId = await chooseBitableTable(target.token, target.parsed.token, target.options.detailFeishuSheetId || target.parsed.tableId || "");
   await ensureBitableFieldNames(target.token, target.parsed.token, tableId, STANDARD_FIELDS);
-  const fieldsMeta = await ensureBitableDetailFields(target.token, target.parsed.token, tableId);
+  const records = await readBitableRecords(target.token, target.parsed.token, tableId);
+  const fieldsMeta = await ensureBitableDetailFields(target.token, target.parsed.token, tableId, records);
   const sourceRow = rowForDetailPayload(payload);
   const valuesByField = canonicalBackfillValues(sourceRow, payload);
   const detailFields = await bitableDetailFieldsWithAttachments({
@@ -4262,7 +4529,6 @@ async function appendDetailPayloadToBitable(target, payload) {
     ...normalizeExportRow(sourceRow),
     ...detailFields
   };
-  const records = await readBitableRecords(target.token, target.parsed.token, tableId);
   const existing = records.find((record) => rowMatchKeys(record.fields || {}).some((key) => rowMatchKeys(sourceRow).includes(key)));
   if (existing) {
     await updateBitableRecord(target.token, target.parsed.token, tableId, existing.record_id || existing.id, fields);
@@ -4543,7 +4809,7 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
           continue;
         }
         if (column.canonicalField === DETAIL_FIELDS[7]) {
-          const usesImage = columnUsesImageTemplate(column, templateItem);
+          const usesImage = columnUsesImageTemplate(column, allItems);
           if (usesImage && !isNoteScreenshotEnabledFromCaptures(captures)) continue;
           if (!usesImage) {
             const value = readMetricValue(valuesByField);
@@ -4675,8 +4941,8 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
 }
 
 async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
-  const fieldsMeta = await ensureBitableDetailFields(table.token, table.appToken, table.tableId);
   const records = await readBitableRecords(table.token, table.appToken, table.tableId);
+  const fieldsMeta = await ensureBitableDetailFields(table.token, table.appToken, table.tableId, records);
   const rows = records
     .map(bitableRecordToDetailItem)
     .filter((item) => bitableNeedsDetail(item, fieldsMeta, table.options || {}));
@@ -4899,6 +5165,25 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === "DOWNLOAD_PGY_XLSX") {
+      const rows = Array.isArray(message.rows) ? message.rows : [];
+      const workbook = rowsToXlsx(rows);
+      const blob = new Blob([workbook], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = URL.createObjectURL(blob);
+      try {
+        const downloadId = await chrome.downloads.download({
+          url,
+          filename: message.filename || exportXlsxFilename(rows.length),
+          saveAs: true
+        });
+        sendResponse({ ok: true, downloadId });
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
+      return;
+    }
     if (message?.type === "DOWNLOAD_PGY_CSV" || message?.type === "DOWNLOAD_CSV") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
       const csv = rowsToCsv(rows);

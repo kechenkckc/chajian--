@@ -54,6 +54,7 @@ const detailCaptureNoteScreenshot = document.getElementById("detailCaptureNoteSc
 const detailValidateBtn = document.getElementById("detailValidateBtn");
 const detailHint = document.getElementById("detailHint");
 const detailConfiguredTable = document.getElementById("detailConfiguredTable");
+const refreshConfiguredTablesBtn = document.getElementById("refreshConfiguredTablesBtn");
 const FEISHU_PERMISSION_HINT = "请检查权限，设为所有人可编辑";
 
 let importedRows = [];
@@ -99,10 +100,10 @@ function findConfiguredTableByFields(url, sheetId) {
 function renderConfiguredTableOptions(options) {
   configuredTables = normalizeTableConfigs(options.feishuTableConfigs);
   detailConfiguredTable.textContent = "";
-  const manualOption = document.createElement("option");
-  manualOption.value = "";
-  manualOption.textContent = configuredTables.length ? "手动输入链接" : "暂无已配置表格";
-  detailConfiguredTable.append(manualOption);
+  const placeholderOption = document.createElement("option");
+  placeholderOption.value = "";
+  placeholderOption.textContent = configuredTables.length ? "请选择已配置表格" : "暂无已配置表格";
+  detailConfiguredTable.append(placeholderOption);
 
   configuredTables.forEach((config, index) => {
     const option = document.createElement("option");
@@ -112,8 +113,13 @@ function renderConfiguredTableOptions(options) {
   });
 
   detailConfiguredTable.disabled = configuredTables.length === 0;
-  const selectedIndex = findConfiguredTableByFields(options.detailFeishuUrl, options.detailFeishuSheetId);
-  detailConfiguredTable.value = selectedIndex >= 0 ? configuredTableValue(configuredTables[selectedIndex]) : "";
+  const matchedIndex = findConfiguredTableByFields(options.detailFeishuUrl, options.detailFeishuSheetId);
+  const selectedIndex = matchedIndex >= 0 ? matchedIndex : (configuredTables.length ? 0 : -1);
+  const selected = selectedIndex >= 0 ? configuredTables[selectedIndex] : null;
+  detailConfiguredTable.value = selected ? configuredTableValue(selected) : "";
+  fields.detailFeishuUrl.value = selected?.url || "";
+  fields.detailFeishuSheetId.value = selected?.sheetId || "";
+  return selected;
 }
 
 function syncConfiguredTableSelectionFromFields() {
@@ -123,13 +129,32 @@ function syncConfiguredTableSelectionFromFields() {
 
 function applyConfiguredDetailTable() {
   const selected = configuredTables.find((config) => configuredTableValue(config) === detailConfiguredTable.value);
-  if (!selected) return;
-  fields.detailFeishuUrl.value = selected.url;
-  fields.detailFeishuSheetId.value = selected.sheetId || "";
+  fields.detailFeishuUrl.value = selected?.url || "";
+  fields.detailFeishuSheetId.value = selected?.sheetId || "";
   detailMultiSheetAvailable = false;
   detailTraverseAllSheets.checked = false;
   updateCapabilityState();
+  if (!selected) return;
   saveOptions().then(() => setStatus(`已选择详情表：${selected.name || "未命名表格"}。`)).catch((error) => setStatus(error.message, true));
+}
+
+async function refreshConfiguredTables({ announce = true } = {}) {
+  const options = await chrome.storage.local.get(DEFAULT_OPTIONS);
+  const selected = renderConfiguredTableOptions(options);
+  detailMultiSheetAvailable = false;
+  detailTraverseAllSheets.checked = false;
+  updateCapabilityState();
+  const nextDetailUrl = selected?.url || "";
+  const nextDetailSheetId = selected?.sheetId || "";
+  if (nextDetailUrl !== (options.detailFeishuUrl || "") || nextDetailSheetId !== (options.detailFeishuSheetId || "")) {
+    await chrome.storage.local.set({ detailFeishuUrl: nextDetailUrl, detailFeishuSheetId: nextDetailSheetId });
+  }
+  if (announce) {
+    setStatus(selected
+      ? `已刷新 ${configuredTables.length} 个配置表，当前选择：${selected.name || "未命名表格"}。`
+      : "飞书配置页暂无可用表格，请先添加并保存配置。", !selected);
+  }
+  return options;
 }
 
 function savedConfigSummary(options) {
@@ -160,14 +185,14 @@ function currentOptions() {
     maxRows: Number(fields.maxRows.value || DEFAULT_OPTIONS.maxRows),
     detailLimit: fields.detailLimit.value ? Number(fields.detailLimit.value) : "",
     collectionMode: fields.collectionMode.value === "detail" ? "detail" : "fast",
-    delayMs: DEFAULT_OPTIONS.delayMs,
-    feishuTableConfigs: configuredTables
+    delayMs: DEFAULT_OPTIONS.delayMs
   };
 }
 
 function mergePersistentOptions(saved, next) {
   const merged = { ...next };
   for (const key of FEISHU_CONFIG_KEYS) {
+    if (key === "detailFeishuUrl" || key === "detailFeishuSheetId") continue;
     if ((merged[key] === "" || merged[key] === null || merged[key] === undefined) && saved[key]) {
       merged[key] = saved[key];
     }
@@ -300,7 +325,12 @@ async function loadOptions() {
   syncUseFirstSheet.checked = Boolean(options.syncUseFirstSheet);
   detailMultiSheetAvailable = Boolean(options.detailTraverseAllSheets);
   syncMultiSheetAvailable = Boolean(options.syncUseFirstSheet);
-  renderConfiguredTableOptions(options);
+  const selected = renderConfiguredTableOptions(options);
+  const nextDetailUrl = selected?.url || "";
+  const nextDetailSheetId = selected?.sheetId || "";
+  if (nextDetailUrl !== (options.detailFeishuUrl || "") || nextDetailSheetId !== (options.detailFeishuSheetId || "")) {
+    await chrome.storage.local.set({ detailFeishuUrl: nextDetailUrl, detailFeishuSheetId: nextDetailSheetId });
+  }
   setSyncSource("current");
   updateCapabilityState();
   setStatus(`${savedConfigSummary(options)}扩展 ID：${chrome.runtime.id}`);
@@ -664,6 +694,14 @@ for (const input of Object.values(fields)) {
 }
 
 detailConfiguredTable.addEventListener("change", applyConfiguredDetailTable);
+refreshConfiguredTablesBtn.addEventListener("click", () => refreshConfiguredTables().catch((error) => setStatus(error.message, true)));
+
+chrome.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== "local" || !changes.feishuTableConfigs) return;
+  refreshConfiguredTables({ announce: false })
+    .then(() => setStatus(`飞书配置已更新，已同步 ${configuredTables.length} 个配置表。`))
+    .catch((error) => setStatus(error.message, true));
+});
 
 writeToFeishuOnExport.addEventListener("change", () => {
   const options = currentOptions();
