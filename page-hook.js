@@ -14,6 +14,7 @@
     activeExportRequestId: "",
     stopRequested: false
   };
+  const inviteSubmitPath = "/api/solar/invite/initiate_invite";
 
   function nowText() {
     const pad = (value) => String(value).padStart(2, "0");
@@ -176,6 +177,40 @@
     });
   }
 
+  function firstDefined(...values) {
+    return values.find((value) => value !== undefined && value !== null && value !== "");
+  }
+
+  function cleanJsonText(value) {
+    return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function safeJsonValue(value) {
+    if (!value || typeof value !== "string") return null;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  }
+
+  function compactTagText(value) {
+    if (value === undefined || value === null || value === "") return "";
+    if (typeof value === "string") {
+      const parsed = /^[\[{]/.test(value.trim()) ? safeJsonValue(value) : null;
+      if (parsed && typeof parsed === "object") return compactTagText(parsed);
+      return cleanJsonText(value);
+    }
+    if (Array.isArray(value)) return value.map(compactTagText).filter(Boolean).join("；");
+    if (typeof value === "object") {
+      const direct = firstDefined(value.name, value.label, value.tag, value.contentTag, value.taxonomy1Tag, value.industryTag);
+      const children = firstDefined(value.taxonomy2Tags, value.children, value.tags);
+      const parts = [direct, compactTagText(children)].map((item) => cleanJsonText(item)).filter(Boolean);
+      return parts.join("-");
+    }
+    return cleanJsonText(value);
+  }
+
   function detailUrl(userId) {
     return userId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}` : "";
   }
@@ -212,7 +247,13 @@
       video_read_unit_price: nestedValue(kol, ["videoReadCost", "videoReadCostV2", "videoReadUnitPrice"]),
       video_interaction_unit_price: nestedValue(kol, ["estimateVideoEngageCost", "videoInteractionUnitPrice"]),
       reply_rate_48h: nestedValue(kol, ["inviteReply48hNumRatio", "responseRate", "replyRate48h"]),
-      creator_type: nestedValue(kol, ["categoryName", "category", "contentTags"]),
+      fans_growth_ratio: nestedValue(kol, ["fans30GrowthRate", "fansGrowthRate"]),
+      active_fans_ratio: nestedValue(kol, ["fansActiveIn28dLv", "activeFansRate"]),
+      interaction_fans_ratio: nestedValue(kol, ["fansEngageNum30dLv", "engageFansRate"]),
+      video_completion_rate: nestedValue(kol, ["videoFinishRate", "videoFullViewRate"]),
+      thousand_like_note_ratio: nestedValue(kol, ["thousandLikePercent30"]),
+      hundred_like_note_ratio: nestedValue(kol, ["hundredLikePercent30"]),
+      creator_type: compactTagText(nestedValue(kol, ["categoryName", "category", "contentTags", "tradeType", "industryTag", "type"])),
       ip_city: nestedValue(kol, ["location", "city"]),
       source: "pgy_browser_extension",
       collected_at: nowText(),
@@ -297,6 +338,215 @@
       throw new Error(payload?.msg || payload?.message || `蒲公英接口请求失败：HTTP ${response.status}`);
     }
     return payload;
+  }
+
+  function apiPayload(payload) {
+    if (!payload || typeof payload !== "object") return payload;
+    if (payload.data !== undefined) return payload.data;
+    return payload;
+  }
+
+  async function fetchPgyApi(path, { method = "GET", query = {}, body = null, allowSubmit = false } = {}) {
+    if (!allowSubmit && String(path || "").includes(inviteSubmitPath)) {
+      throw new Error("安全模式已拦截真实发起邀约请求。");
+    }
+    const parsed = new URL(path, location.origin);
+    for (const [key, value] of Object.entries(query || {})) {
+      if (value !== undefined && value !== null && value !== "") parsed.searchParams.set(key, String(value));
+    }
+    const init = {
+      method: String(method || "GET").toUpperCase(),
+      credentials: "include",
+      headers: { "content-type": "application/json" }
+    };
+    if (init.method !== "GET" && init.method !== "HEAD") {
+      init.body = JSON.stringify(body || {});
+    }
+    const response = await fetch(parsed.toString(), init);
+    const text = await response.text();
+    let payload = {};
+    try {
+      payload = text ? JSON.parse(text) : {};
+    } catch {
+      throw new Error(`蒲公英接口返回非 JSON：${text.slice(0, 120)}`);
+    }
+    if (!response.ok || payload?.success === false || Number(payload?.code || 0) !== 0 && payload?.code !== undefined) {
+      throw new Error(payload?.msg || payload?.message || `蒲公英接口请求失败：HTTP ${response.status}`);
+    }
+    return { ok: true, status: response.status, payload, data: apiPayload(payload) };
+  }
+
+  function extractUserIdFromText(text) {
+    const raw = String(text || "").trim();
+    if (!raw) return "";
+    const decoded = (() => {
+      try {
+        return decodeURIComponent(raw);
+      } catch {
+        return raw;
+      }
+    })();
+    const patterns = [
+      /\/blogger-detail\/([A-Za-z0-9_-]{6,})/,
+      /\/user\/profile\/([A-Za-z0-9_-]{6,})/,
+      /[?&](?:id|userId|kolId|bloggerId)=([A-Za-z0-9_-]{6,})/,
+      /\bpgy-api:([A-Za-z0-9_-]{6,})/
+    ];
+    for (const pattern of patterns) {
+      const match = decoded.match(pattern);
+      if (match?.[1]) return match[1];
+    }
+    return /^[A-Za-z0-9_-]{6,}$/.test(decoded) ? decoded : "";
+  }
+
+  async function searchBrands(keyword) {
+    const name = String(keyword || "").trim();
+    if (!name) return { ok: true, brands: [] };
+    const result = await fetchPgyApi("/api/solar/brand/search_brand", {
+      query: { name, pageSize: 50, scene: 14 }
+    });
+    const list = Array.isArray(result.data?.list) ? result.data.list : Array.isArray(result.data) ? result.data : [];
+    return {
+      ok: true,
+      brands: list.map((item) => ({
+        ...item,
+        label: item.brandName || item.name || "",
+        value: item.brandUserId || item.userId || item.id || "",
+        avatar: item.brandAvatar || item.avatar || "",
+        disabled: Boolean(item.disabled || item.disableSelected)
+      })).filter((item) => item.label || item.value)
+    };
+  }
+
+  async function resolveInviteBloggers(inputs = []) {
+    const links = Array.isArray(inputs) ? inputs : [];
+    const results = [];
+    for (const input of links) {
+      const text = String(input || "").trim();
+      const userId = extractUserIdFromText(text);
+      if (!userId) {
+        results.push({ input: text, ok: false, message: "无法识别博主 ID" });
+        continue;
+      }
+      try {
+        const detail = await fetchPgyApi(`/api/solar/cooperator/user/blogger/${encodeURIComponent(userId)}`);
+        const permission = await fetchPgyApi("/api/solar/invite/check_invite_permission", {
+          query: { kol_id: userId }
+        }).catch((error) => ({ ok: false, message: error?.message || String(error), data: {} }));
+        const data = detail.data || {};
+        results.push({
+          input: text,
+          ok: true,
+          userId,
+          name: data.name || data.nickName || data.nickname || "",
+          avatar: data.headPhoto || data.avatar || "",
+          redId: data.redId || "",
+          picturePrice: data.picturePrice,
+          videoPrice: data.videoPrice,
+          pictureState: data.pictureState,
+          videoState: data.videoState,
+          permission: permission.data || {},
+          raw: data
+        });
+      } catch (error) {
+        results.push({ input: text, ok: false, userId, message: error?.message || String(error) });
+      }
+      await new Promise((resolve) => setTimeout(resolve, 160));
+    }
+    return { ok: true, results };
+  }
+
+  async function buildInviteDraft(options = {}) {
+    const bloggers = Array.isArray(options.bloggers) ? options.bloggers.filter((item) => item?.ok && item.userId) : [];
+    const form = options.form || {};
+    const brand = form.brand || {};
+    const kolIds = bloggers.map((item) => item.userId);
+    const userInfo = await fetchPgyApi("/api/solar/user/info").catch(() => ({ data: {} }));
+    const inviteData = {
+      cooperateBrandName: brand.brandName || brand.label || "",
+      cooperateBrandId: brand.brandUserId || brand.value || "",
+      productName: String(form.productName || "").trim(),
+      inviteType: Number(form.contentType || 1),
+      expectedPublishTimeStart: form.startDate || "",
+      expectedPublishTimeEnd: form.endDate || "",
+      inviteContent: String(form.productDesc || "").trim(),
+      contactType: Number(form.contactType || 1),
+      contactInfo: String(form.contact || "").trim(),
+      brandUserId: userInfo.data?.userId || ""
+    };
+    return {
+      ok: true,
+      safeMode: true,
+      message: "已生成邀约草稿。安全模式不会调用真实发起邀约接口。",
+      payload: {
+        kolIds,
+        inviteData,
+        perKolPayloads: kolIds.map((kolId) => ({ kolId, ...inviteData }))
+      },
+      inviteUrls: bloggers.map((item) => `https://pgy.xiaohongshu.com/solar/pre-trade/invite-form?id=${encodeURIComponent(item.userId)}&fromRoute=BloggerDetail`)
+    };
+  }
+
+  function wait(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  async function submitInvites(options = {}) {
+    const draft = await buildInviteDraft(options);
+    const perKolPayloads = Array.isArray(draft.payload?.perKolPayloads) ? draft.payload.perKolPayloads : [];
+    if (!perKolPayloads.length) throw new Error("没有可提交的邀约达人。");
+    const results = [];
+    let remainTimes = null;
+    for (let index = 0; index < perKolPayloads.length; index += 1) {
+      const payload = perKolPayloads[index];
+      if (index > 0) await wait(1000);
+      try {
+        const response = await fetchPgyApi("https://pgy.xiaohongshu.com/api/solar/invite/initiate_invite", {
+          method: "POST",
+          body: payload,
+          allowSubmit: true
+        });
+        const data = response.data || response.payload || {};
+        if (!data.inviteSucceed) throw new Error(data.hint || data.msg || data.message || "邀约失败");
+        remainTimes = data.remainTimes ?? remainTimes;
+        const overview = await fetchPgyApi("https://pgy.xiaohongshu.com/api/solar/invite/get_invites_overview", {
+          method: "POST",
+          body: {
+            kolIntention: -1,
+            inviteStatus: -1,
+            kolType: 0,
+            kolId: payload.kolId,
+            showWechat: 0,
+            searchDateType: 1,
+            pageNum: 1,
+            pageSize: 10
+          }
+        }).catch(() => null);
+        results.push({
+          ok: true,
+          kolId: payload.kolId,
+          remainTimes,
+          invite: overview?.data?.invites?.[0] || null
+        });
+      } catch (error) {
+        results.push({
+          ok: false,
+          kolId: payload.kolId,
+          message: error?.message || String(error)
+        });
+      }
+    }
+    const successCount = results.filter((item) => item.ok).length;
+    return {
+      ok: true,
+      submitted: true,
+      intervalMs: 1000,
+      total: perKolPayloads.length,
+      successCount,
+      failedCount: perKolPayloads.length - successCount,
+      remainTimes,
+      results
+    };
   }
 
   async function exportAll(options = {}, requestId) {
@@ -408,6 +658,22 @@
           requestId,
           payload: { ok: true, activeRequestId: state.activeExportRequestId }
         }, "*");
+      }
+      if (message.type === "PGY_INVITE_SEARCH_BRAND") {
+        const payload = await searchBrands(message.options?.keyword || "");
+        window.postMessage({ source: PAGE_SOURCE, type: "PGY_INVITE_SEARCH_BRAND_RESULT", requestId, payload }, "*");
+      }
+      if (message.type === "PGY_INVITE_RESOLVE_BLOGGERS") {
+        const payload = await resolveInviteBloggers(message.options?.inputs || []);
+        window.postMessage({ source: PAGE_SOURCE, type: "PGY_INVITE_RESOLVE_BLOGGERS_RESULT", requestId, payload }, "*");
+      }
+      if (message.type === "PGY_INVITE_BUILD_DRAFT") {
+        const payload = await buildInviteDraft(message.options || {});
+        window.postMessage({ source: PAGE_SOURCE, type: "PGY_INVITE_BUILD_DRAFT_RESULT", requestId, payload }, "*");
+      }
+      if (message.type === "PGY_INVITE_SUBMIT") {
+        const payload = await submitInvites(message.options || {});
+        window.postMessage({ source: PAGE_SOURCE, type: "PGY_INVITE_SUBMIT_RESULT", requestId, payload }, "*");
       }
     } catch (error) {
       window.postMessage({

@@ -1,12 +1,13 @@
 {
   "manifest_version": 3,
   "name": "蒲公英达人导出同步飞书",
-  "version": "0.4.2",
+  "version": "0.5.3",
   "description": "导出蒲公英当前筛选条件下的达人表格，同步到飞书，并补足详情。",
   "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs", "sidePanel", "debugger", "notifications"],
   "host_permissions": [
     "<all_urls>",
     "https://pgy.xiaohongshu.com/*",
+    "https://www.xiaohongshu.com/*",
     "https://open.feishu.cn/*",
     "https://open.larksuite.com/*",
     "http://127.0.0.1:*/*",
@@ -32,10 +33,20 @@
     },
     {
       "matches": ["https://pgy.xiaohongshu.com/*"],
-      "exclude_matches": ["https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/*"],
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_start"
+    },
+    {
+      "matches": ["https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/*"],
+      "js": ["detail-capture.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://www.xiaohongshu.com/user/profile/*"],
+      "js": ["xhs-profile-bridge.js"],
+      "css": ["xhs-profile-bridge.css"],
+      "run_at": "document_idle"
     }
   ],
   "web_accessible_resources": [

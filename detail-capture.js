@@ -24,6 +24,388 @@
     return String(document.body?.innerText || document.body?.textContent || "");
   }
 
+  function selectorText(selector) {
+    const element = document.querySelector(selector);
+    return cleanText(element?.innerText || element?.textContent || "");
+  }
+
+  function smallVisibleRect(element) {
+    if (!element || !(element instanceof Element)) return null;
+    const rect = element.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return null;
+    const style = window.getComputedStyle(element);
+    if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return null;
+    return rect;
+  }
+
+  function scoreFavoriteHost(element) {
+    if (!element || element.id?.startsWith("pgy-")) return null;
+    const rect = smallVisibleRect(element);
+    if (!rect || rect.width < 220 || rect.width > 560 || rect.height < 90 || rect.height > 560) return null;
+    const text = cleanText(element.innerText || element.textContent || "");
+    if (!text || text.includes("数据概览") || text.includes("笔记数据")) return null;
+
+    let score = 0;
+    if (element.matches(".blogger-base-info, .blogger-info, .kol-base-info, .kol-info, .author-info, .creator-info, .profile-card")) score += 5;
+    if (/小红书号|红书号/.test(text)) score += 5;
+    if (/粉丝数|粉丝/.test(text)) score += 2;
+    if (/获赞与收藏|赞藏/.test(text)) score += 2;
+    if (element.querySelector("img")) score += 2;
+    if (rect.left < window.innerWidth * 0.55) score += 2;
+    if (rect.width >= 250 && rect.width <= 420) score += 1;
+    if (rect.height >= 120 && rect.height <= 460) score += 1;
+    if (/合作报价|相似的博主推荐/.test(text)) score -= 4;
+    return score >= 7 ? { element, rect, score } : null;
+  }
+
+  function findFavoriteHost() {
+    const knownSelectors = [
+      ".blogger-base-info",
+      ".blogger-info",
+      ".kol-base-info",
+      ".kol-info",
+      ".author-info",
+      ".creator-info",
+      ".profile-card",
+      "[class*='blogger'][class*='info']",
+      "[class*='kol'][class*='info']",
+      "[class*='profile'][class*='card']"
+    ];
+    const candidates = new Set();
+    for (const selector of knownSelectors) {
+      for (const element of document.querySelectorAll(selector)) candidates.add(element);
+    }
+    for (const element of document.querySelectorAll("aside, section, article, div")) {
+      const text = element.innerText || element.textContent || "";
+      if (/小红书号|红书号/.test(text)) candidates.add(element);
+    }
+    return Array.from(candidates)
+      .map(scoreFavoriteHost)
+      .filter(Boolean)
+      .sort((a, b) => {
+        const areaA = a.rect.width * a.rect.height;
+        const areaB = b.rect.width * b.rect.height;
+        return b.score - a.score || areaA - areaB;
+      })[0]?.element || null;
+  }
+
+  function findFavoriteAvatar(host) {
+    if (!host) return null;
+    const hostRect = smallVisibleRect(host);
+    if (!hostRect) return null;
+    return Array.from(host.querySelectorAll("img"))
+      .map((element) => ({ element, rect: smallVisibleRect(element) }))
+      .filter((item) => {
+        if (!item.rect) return false;
+        const ratio = item.rect.width / item.rect.height;
+        const insideHost = item.rect.left >= hostRect.left - 2 && item.rect.right <= hostRect.right + 2;
+        return insideHost && ratio >= 0.7 && ratio <= 1.3 && item.rect.width >= 32 && item.rect.width <= 96 && item.rect.height >= 32 && item.rect.height <= 96;
+      })
+      .sort((a, b) => {
+        const areaA = a.rect.width * a.rect.height;
+        const areaB = b.rect.width * b.rect.height;
+        return areaB - areaA || a.rect.left - b.rect.left;
+      })[0] || null;
+  }
+
+  function placeFavoriteAboveAvatar(button, host) {
+    const hostRect = smallVisibleRect(host);
+    const avatarRect = findFavoriteAvatar(host)?.rect;
+    if (!hostRect || !avatarRect) return false;
+
+    const buttonWidth = 204;
+    const buttonHeight = 30;
+    const gap = 8;
+    const minLeft = 8;
+    const maxLeft = Math.max(minLeft, hostRect.width - buttonWidth - 8);
+    const left = Math.min(maxLeft, Math.max(minLeft, avatarRect.left - hostRect.left + avatarRect.width / 2 - buttonWidth / 2));
+    const top = avatarRect.top - hostRect.top - buttonHeight - gap;
+
+    button.style.setProperty("--pgy-detail-favorite-left", `${Math.round(left)}px`);
+    button.style.setProperty("--pgy-detail-favorite-top", `${Math.round(top)}px`);
+    return true;
+  }
+
+  function ensureFavoriteStyle() {
+    if (document.getElementById("pgy-detail-favorite-style")) return;
+    const style = document.createElement("style");
+    style.id = "pgy-detail-favorite-style";
+    style.textContent = `
+      .pgy-detail-favorite-host {
+        position: relative !important;
+        overflow: visible !important;
+      }
+      #pgy-detail-favorite-tools {
+        z-index: 20;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+      }
+      #pgy-detail-favorite-btn,
+      #pgy-detail-prefavorite-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 5px;
+        min-width: 96px;
+        height: 30px;
+        padding: 0 11px;
+        border: 1px solid rgba(255, 36, 72, 0.24);
+        border-radius: 16px;
+        color: #ff2448;
+        background: #fff;
+        font: 600 13px/1 "Microsoft YaHei", "PingFang SC", sans-serif;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+      #pgy-detail-prefavorite-btn {
+        color: #245d3c;
+        border-color: rgba(36, 93, 60, 0.3);
+        background: #f7ffe9;
+      }
+      #pgy-detail-favorite-tools.is-profile-mounted {
+        position: absolute;
+        top: var(--pgy-detail-favorite-top, 16px);
+        left: var(--pgy-detail-favorite-left, 18px);
+        box-shadow: 0 4px 14px rgba(255, 36, 72, 0.08);
+      }
+      #pgy-detail-favorite-tools.is-floating-fallback {
+        position: fixed;
+        left: max(24px, calc((100vw - 1180px) / 2 + 18px));
+        top: 150px;
+        z-index: 2147483647;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+      }
+      #pgy-detail-favorite-btn:hover { background: #fff5f7; }
+      #pgy-detail-prefavorite-btn:hover { background: #eaf5dd; }
+      #pgy-detail-favorite-btn[disabled],
+      #pgy-detail-prefavorite-btn[disabled] {
+        cursor: default;
+        opacity: 0.72;
+      }
+      #pgy-detail-favorite-toast {
+        position: fixed;
+        right: 24px;
+        top: 140px;
+        z-index: 2147483647;
+        max-width: 320px;
+        padding: 8px 10px;
+        border-radius: 6px;
+        color: #134e31;
+        background: #ecfdf3;
+        box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+        font: 13px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+        word-break: break-word;
+      }
+      #pgy-detail-favorite-toast:empty { display: none; }
+      #pgy-detail-favorite-toast.is-error {
+        color: #9f1239;
+        background: #fff1f2;
+      }
+    `;
+    document.documentElement.appendChild(style);
+  }
+
+  function mountFavoriteButton(button) {
+    const mountedHost = window.__PGY_DETAIL_FAVORITE_HOST__;
+    if (mountedHost?.isConnected) {
+      if (button.parentElement !== mountedHost) mountedHost.appendChild(button);
+      return true;
+    }
+
+    const host = findFavoriteHost();
+    button.classList.toggle("is-profile-mounted", Boolean(host));
+    button.classList.toggle("is-floating-fallback", !host);
+    if (!host) {
+      if ((window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ || 0) < 20) return false;
+      document.documentElement.appendChild(button);
+      return true;
+    }
+
+    host.classList.add("pgy-detail-favorite-host");
+    if (!placeFavoriteAboveAvatar(button, host)) {
+      if ((window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ || 0) < 20) return false;
+      button.style.setProperty("--pgy-detail-favorite-left", "18px");
+      button.style.setProperty("--pgy-detail-favorite-top", "16px");
+    }
+    if (button.parentElement !== host) host.appendChild(button);
+    window.__PGY_DETAIL_FAVORITE_HOST__ = host;
+    return true;
+  }
+
+  function showFavoriteToast(message, isError = false) {
+    let toast = document.getElementById("pgy-detail-favorite-toast");
+    if (!toast) {
+      toast = document.createElement("div");
+      toast.id = "pgy-detail-favorite-toast";
+      document.documentElement.appendChild(toast);
+    }
+    toast.textContent = message;
+    toast.className = isError ? "is-error" : "";
+    window.clearTimeout(showFavoriteToast.timer);
+    showFavoriteToast.timer = window.setTimeout(() => {
+      toast.textContent = "";
+      toast.className = "";
+    }, 4500);
+  }
+
+  function favoriteProfileName(host) {
+    const selectors = [
+      ".blogger-name",
+      ".kol-name",
+      ".nickname",
+      "[class*='blogger'][class*='name']",
+      "[class*='nickname']",
+      "h1",
+      "h2",
+      "h3",
+      "strong"
+    ];
+    for (const selector of selectors) {
+      for (const element of host?.querySelectorAll(selector) || []) {
+        const text = cleanText(element.textContent || "");
+        if (text && text.length <= 40 && !/小红书号|粉丝|收藏|邀约|报价/.test(text)) return text;
+      }
+    }
+    return cleanText(document.title).split(/[\-|｜]/)[0] || "蒲公英达人";
+  }
+
+  function favoriteAvatarUrl(host) {
+    const avatar = findFavoriteAvatar(host)?.element;
+    const candidates = [avatar?.currentSrc, avatar?.src, avatar?.getAttribute("data-src")];
+    return candidates.map((value) => String(value || "").trim()).find((value) => /^https?:\/\//i.test(value) || /^data:image\//i.test(value)) || "";
+  }
+
+  function favoriteMetricText(value) {
+    if (value === null || value === undefined || value === "") return "";
+    const number = Number(value);
+    if (!Number.isFinite(number)) return String(value);
+    if (Math.abs(number) >= 10000) return `${Math.round((number / 10000) * 100) / 100}万`;
+    return String(Math.round(number * 100) / 100);
+  }
+
+  async function saveCurrentDetailAsPreFavorite() {
+    const detail = extractDetailFields(bodyText(), location.href);
+    const userId = detail.pgy_blogger_id || (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    if (!userId) throw new Error("没有识别到当前达人 ID。");
+    const host = findFavoriteHost();
+    const now = new Date().toISOString();
+    const record = {
+      userId,
+      name: favoriteProfileName(host),
+      avatar: favoriteAvatarUrl(host),
+      redId: detail.xiaohongshu_id || "",
+      location: labelValue(textLines(bodyText()), "IP属地") || labelValue(textLines(bodyText()), "所在地") || "",
+      followersText: favoriteMetricText(detail.followers_count),
+      likesText: favoriteMetricText(detail.liked_collected_count),
+      picturePriceText: favoriteMetricText(detail.quote_price),
+      videoPriceText: favoriteMetricText(detail.video_quote_price),
+      quoteStatus: detail.quote_price || detail.video_quote_price ? "报价已获取" : "报价获取中",
+      bio: detail.personal_intro || detail.blogger_advantage || "",
+      categoryTags: String(detail.topic_point || "").split(/[、,，;；/]+/).map((item) => item.trim()).filter(Boolean).slice(0, 6),
+      categorySource: detail.topic_point ? "pgy_detail" : "pending",
+      xhsUrl: detail.profile_url || `https://www.xiaohongshu.com/user/profile/${userId}`,
+      pgyUrl: location.href,
+      source: "pgy_detail_prefavorite",
+      status: "预收藏",
+      createdAt: now,
+      updatedAt: now
+    };
+    const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+    const favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
+    const existingIndex = favorites.findIndex((item) => item?.userId === userId);
+    const next = [...favorites];
+    if (existingIndex >= 0) {
+      next[existingIndex] = { ...next[existingIndex], ...record, createdAt: next[existingIndex].createdAt || now };
+    } else {
+      next.unshift(record);
+    }
+    await chrome.storage.local.set({ pgyPreFavorites: next });
+    chrome.runtime.sendMessage({ type: "ENRICH_PREFAVORITE_QUOTE", userId }).catch(() => null);
+    return { existing: existingIndex >= 0, count: next.length };
+  }
+
+  async function refreshPreFavoriteButtonState(button) {
+    const userId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    if (!userId || !button) return;
+    const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+    const exists = Array.isArray(stored.pgyPreFavorites) && stored.pgyPreFavorites.some((item) => item?.userId === userId);
+    if (exists) button.textContent = "✓ 已预收藏";
+  }
+
+  function installFavoriteButton() {
+    ensureFavoriteStyle();
+    let tools = document.getElementById("pgy-detail-favorite-tools");
+    if (!tools) {
+      tools = document.createElement("div");
+      tools.id = "pgy-detail-favorite-tools";
+    }
+    let button = document.getElementById("pgy-detail-favorite-btn");
+    if (!button) {
+      button = document.createElement("button");
+      button.id = "pgy-detail-favorite-btn";
+      button.type = "button";
+      button.textContent = "☆ 收藏";
+      button.addEventListener("click", async () => {
+        if (button.disabled) return;
+        button.disabled = true;
+        button.textContent = "已加入后台";
+        showFavoriteToast("已在后台打开详情采集，不影响当前页面操作。");
+        try {
+          const result = await chrome.runtime.sendMessage({ type: "FAVORITE_CURRENT_DETAIL" });
+          if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
+          button.textContent = "★ 后台收藏中";
+          showFavoriteToast("收藏任务已开始，可关闭当前页或继续操作。完成后会系统通知。");
+        } catch (error) {
+          button.textContent = "☆ 收藏";
+          showFavoriteToast(error?.message || String(error), true);
+        } finally {
+          button.disabled = false;
+        }
+      });
+    }
+    let preFavoriteButton = document.getElementById("pgy-detail-prefavorite-btn");
+    if (!preFavoriteButton) {
+      preFavoriteButton = document.createElement("button");
+      preFavoriteButton.id = "pgy-detail-prefavorite-btn";
+      preFavoriteButton.type = "button";
+      preFavoriteButton.textContent = "☆ 预收藏";
+      preFavoriteButton.addEventListener("click", async () => {
+        if (preFavoriteButton.disabled) return;
+        preFavoriteButton.disabled = true;
+        preFavoriteButton.textContent = "保存中...";
+        try {
+          const result = await saveCurrentDetailAsPreFavorite();
+          preFavoriteButton.textContent = "✓ 已预收藏";
+          showFavoriteToast(result.existing ? "已更新这位达人的预收藏信息。" : `已加入预收藏，共 ${result.count} 位达人。`);
+        } catch (error) {
+          preFavoriteButton.textContent = "☆ 预收藏";
+          showFavoriteToast(error?.message || String(error), true);
+        } finally {
+          preFavoriteButton.disabled = false;
+        }
+      });
+    }
+    if (button.parentElement !== tools) tools.appendChild(button);
+    if (preFavoriteButton.parentElement !== tools) tools.appendChild(preFavoriteButton);
+    const mounted = mountFavoriteButton(tools);
+    refreshPreFavoriteButtonState(preFavoriteButton).catch(() => null);
+    if (!mounted) scheduleFavoriteButtonMountRetry();
+  }
+
+  function scheduleFavoriteButtonMountRetry() {
+    if (window.__PGY_DETAIL_FAVORITE_HOST__?.isConnected) return;
+    if (window.__PGY_DETAIL_FAVORITE_RETRY_TIMER__) return;
+    window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ = window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ || 0;
+    if (window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ >= 20) return;
+    window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ += 1;
+    window.__PGY_DETAIL_FAVORITE_RETRY_TIMER__ = window.setTimeout(() => {
+      window.__PGY_DETAIL_FAVORITE_RETRY_TIMER__ = 0;
+      installFavoriteButton();
+    }, 300);
+  }
+
   function textLines(text) {
     return String(text || "")
       .split(/\n+/)
@@ -59,8 +441,20 @@
       if (line.startsWith(`${normalizedLabel}：`) || line.startsWith(`${normalizedLabel}:`)) {
         return cleanText(line.slice(normalizedLabel.length + 1));
       }
+      const inline = line.match(new RegExp(`${normalizedLabel}\\s*[:：]?\\s*([A-Za-z0-9._-]{3,})`, "i"));
+      if (inline) return inline[1];
     }
     return "";
+  }
+
+  function redIdFromText(text, lines) {
+    const labels = ["小红书号", "红书号", "小红书ID", "小红书账号"];
+    for (const label of labels) {
+      const value = labelValue(lines, label);
+      if (value) return value;
+    }
+    const match = String(text || "").match(/(?:小红书号|红书号|小红书ID|小红书账号)\s*[:：]?\s*([A-Za-z0-9._-]{3,})/i);
+    return match ? match[1] : "";
   }
 
   function metricAfter(lines, label) {
@@ -72,7 +466,8 @@
   }
 
   function ratioNear(lines, label) {
-    const index = lines.findIndex((line) => line.includes(label));
+    const labels = Array.isArray(label) ? label : [label];
+    const index = lines.findIndex((line) => labels.some((item) => line.includes(item)));
     if (index < 0) return null;
     for (let offset = 0; offset <= 3; offset += 1) {
       const value = ratioFromText(lines[index + offset]);
@@ -114,8 +509,9 @@
     const lines = textLines(text);
     const bloggerId = (url.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
     const personalIntro = ["个人简介：", "个人简介", "简介：", "简介"].map((label) => labelValue(lines, label)).find(Boolean) || "";
-    const age35 = ratioNear(lines, "35-44");
-    const age44 = ratioNear(lines, ">44") || ratioNear(lines, "44岁以上");
+    const redId = redIdFromText(text, lines);
+    const age35 = ratioNear(lines, ["35-44", "35~44", "35～44"]);
+    const age44 = ratioNear(lines, [">44", "44+", "44岁以上", "45岁以上"]);
     const fanAnalysis = {
       fan_growth: metricAfter(lines, "粉丝增量"),
       fan_growth_ratio: ratioAfter(lines, "粉丝量变化幅度"),
@@ -125,8 +521,9 @@
       order_fans_ratio: ratioAfter(lines, "下单粉丝占比"),
       female_fans_ratio: ratioNear(lines, "女性"),
       male_fans_ratio: ratioNear(lines, "男性"),
-      fans_18_24_ratio: ratioNear(lines, "18-24"),
-      fans_25_34_ratio: ratioNear(lines, "25-34"),
+      fans_under_18_ratio: ratioNear(lines, ["<18", "18岁以下"]),
+      fans_18_24_ratio: ratioNear(lines, ["18-24", "18~24", "18～24"]),
+      fans_25_34_ratio: ratioNear(lines, ["25-34", "25~34", "25～34"]),
       fans_35_44_ratio: age35,
       fans_44_plus_ratio: age44,
       gender_distribution: lineBetween(lines, "性别分布", "年龄分布"),
@@ -146,6 +543,7 @@
       median_comment_count: metricAfter(lines, "中位评论量"),
       median_share_count: metricAfter(lines, "中位分享量"),
       interaction_rate: ratioAfter(lines, "互动率"),
+      picture_3s_read_rate: ratioAfter(lines, "图文3秒阅读率") || ratioAfter(lines, "图文3s阅读率") || ratioAfter(lines, "3秒阅读率") || ratioAfter(lines, "3s阅读率"),
       video_completion_rate: ratioAfter(lines, "视频完播率"),
       thousand_like_note_ratio: ratioAfter(lines, "千赞笔记比例"),
       hundred_like_note_ratio: ratioAfter(lines, "百赞笔记比例")
@@ -162,11 +560,13 @@
     }
     const topicLine = lines.find((line) => line.includes("用户最感兴趣的内容类型为")) || "";
     const advantageMatch = text.match(/博主优势([\s\S]*?)笔记数据/);
+    const organizationName = selectorText(".blogger-base-info .blogger-company") || selectorText(".blogger-company");
     const rawDetail = {
       detail_url: url,
       detail_text: text.slice(0, 12000),
       lines,
       data_updated_to: labelValue(lines, "数据更新至："),
+      organization_name: organizationName,
       personal_intro: personalIntro,
       blogger_advantage: advantageMatch ? cleanText(advantageMatch[1]).replace(/\s+/g, "") : "",
       note_performance: notePerformance,
@@ -180,7 +580,8 @@
       pgy_url: url,
       profile_url: bloggerId ? `https://www.xiaohongshu.com/user/profile/${bloggerId}` : "",
       pgy_blogger_id: bloggerId,
-      xiaohongshu_id: labelValue(lines, "小红书号：") || labelValue(lines, "小红书号"),
+      xiaohongshu_id: redId,
+      organization_name: organizationName,
       personal_intro: personalIntro,
       blogger_advantage: rawDetail.blogger_advantage,
       topic_point: topicLine.replace("用户最感兴趣的内容类型为", "").trim(),
@@ -458,6 +859,8 @@
       hideStyle.id = "pgy-detail-hide-extension-ui";
       hideStyle.textContent = `
         #pgy-exporter-panel,
+        #pgy-detail-favorite-btn,
+        #pgy-detail-favorite-toast,
         [id^="pgy-exporter-"],
         .pgy-exporter-head,
         .pgy-exporter-body,
@@ -551,4 +954,10 @@
     }
     return false;
   });
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", installFavoriteButton, { once: true });
+  } else {
+    installFavoriteButton();
+  }
 })();

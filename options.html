@@ -8,11 +8,14 @@
   <body>
     <main class="settings">
       <header class="topbar">
-        <div>
-          <p class="eyebrow">飞书配置</p>
-          <h1>蒲公英达人同步飞书</h1>
+        <div class="product-lockup">
+          <span class="product-mark">SOLO专用</span>
+          <div>
+            <p class="eyebrow">系统配置中心</p>
+            <h1>蒲公英达人同步飞书</h1>
+          </div>
         </div>
-        <p class="note">这组凭证用于插件访问飞书。</p>
+        <p class="note top-note">本机安全存储 · 仅供插件访问飞书</p>
       </header>
 
       <section class="band status-band">
@@ -45,6 +48,35 @@
         </label>
       </section>
 
+      <section class="band">
+        <div class="section-title-row">
+          <h2>表格配置</h2>
+          <button id="addTableConfigBtn" type="button" class="secondary compact">新增表格</button>
+        </div>
+        <div id="tableConfigList" class="table-config-list"></div>
+        <p class="note">备注由你自定义；表格名称和子表名称会在检测飞书链接后自动获取。请先检测并选择子表，再保存设置。</p>
+      </section>
+
+      <section class="band">
+        <h2>采集模式</h2>
+        <label>
+          <span>导出/写入模式</span>
+          <select id="collectionMode">
+            <option value="detail">全采集：列表后补采达人详情</option>
+            <option value="fast">快速采集：只采集找博主列表接口</option>
+          </select>
+        </label>
+        <label class="inline">
+          <input id="detailCaptureFansScreenshot" type="checkbox" />
+          <span>全采集时写入粉丝画像截图</span>
+        </label>
+        <label class="inline">
+          <input id="detailCaptureNoteScreenshot" type="checkbox" />
+          <span>全采集时写入笔记数据截图</span>
+        </label>
+        <p class="note">全采集会逐个达人补齐详情字段；快速采集只使用找博主列表接口。截图会增加耗时，但能写入图片列。</p>
+      </section>
+
       <div hidden>
         <input id="feishuUrl" type="hidden" />
         <input id="feishuSheetId" type="hidden" />
@@ -54,9 +86,12 @@
         <input id="maxRows" type="hidden" />
         <input id="detailLimit" type="hidden" />
         <input id="detailTraverseAllSheets" type="checkbox" />
+        <input id="syncUpdateExisting" type="checkbox" />
+        <input id="syncUseFirstSheet" type="checkbox" />
       </div>
 
       <div class="actions">
+        <button id="openFavoritesBtn" type="button" class="secondary">打开预收藏达人</button>
         <button id="checkSyncBtn" type="button" class="secondary">检测同步设置</button>
         <button id="saveBtn" type="button">保存设置</button>
       </div>

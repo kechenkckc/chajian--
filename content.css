@@ -3,12 +3,14 @@
   right: 18px;
   bottom: 18px;
   z-index: 2147483647;
-  width: 292px;
-  color: #14201a;
-  background: #f7fbf6;
-  border: 1px solid rgba(28, 76, 52, 0.24);
-  box-shadow: 0 18px 44px rgba(21, 44, 31, 0.18);
-  font: 13px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+  width: 326px;
+  overflow: hidden;
+  color: #15251c;
+  background: #f4f7f1;
+  border: 1px solid rgba(20, 55, 36, 0.28);
+  border-radius: 14px;
+  box-shadow: 0 22px 54px rgba(14, 35, 23, 0.22), 0 2px 0 rgba(255, 255, 255, 0.65) inset;
+  font: 13px/1.45 "Microsoft YaHei UI", "PingFang SC", sans-serif;
   transform: translate3d(0, 0, 0);
   backface-visibility: hidden;
   will-change: transform;
@@ -22,15 +24,35 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 38px;
-  padding: 0 10px 0 12px;
-  color: #f9fff7;
-  background: #1f5a3e;
+  min-height: 46px;
+  padding: 0 10px 0 14px;
+  color: #f7ffe9;
+  background: linear-gradient(112deg, #173c28 0%, #245d3c 72%, #326d43 100%);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
-.pgy-exporter-head strong {
+.pgy-exporter-brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.pgy-exporter-brand span {
+  display: grid;
+  place-items: center;
+  width: 58px;
+  height: 22px;
+  color: #173c28;
+  background: #d7f55f;
+  border-radius: 5px;
+  font: 800 9px/1 "Microsoft YaHei UI", sans-serif;
+  letter-spacing: 0.2px;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.25) inset;
+}
+
+.pgy-exporter-brand strong {
   font-weight: 700;
-  letter-spacing: 0;
+  letter-spacing: 0.4px;
 }
 
 .pgy-exporter-head button {
@@ -39,49 +61,232 @@
   border: 0;
   color: #f9fff7;
   background: transparent;
+  border-radius: 6px;
   cursor: pointer;
+}
+
+.pgy-exporter-head button:hover {
+  background: rgba(255, 255, 255, 0.1);
 }
 
 .pgy-exporter-body {
   padding: 12px;
+  background-image: linear-gradient(rgba(31, 90, 62, 0.035) 1px, transparent 1px), linear-gradient(90deg, rgba(31, 90, 62, 0.035) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+.pgy-exporter-task {
+  position: relative;
+  overflow: hidden;
+  padding: 13px 14px 11px;
+  background: rgba(255, 255, 252, 0.94);
+  border: 1px solid rgba(31, 90, 62, 0.18);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(23, 60, 40, 0.08);
+}
+
+.pgy-exporter-task::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 58px;
+  height: 58px;
+  background: linear-gradient(135deg, transparent 49%, rgba(215, 245, 95, 0.3) 50%);
+  pointer-events: none;
+}
+
+.pgy-exporter-task-head,
+.pgy-exporter-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.pgy-exporter-task-state {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: #587064;
+  font-size: 11px;
+}
+
+.pgy-exporter-task-state i {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  background: #9baa9f;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(111, 131, 118, 0.12);
+}
+
+.pgy-exporter-task-head time {
+  color: #6d7d73;
+  font: 700 11px/1.2 Consolas, monospace;
+  letter-spacing: 0.5px;
+}
+
+.pgy-exporter-task-label {
+  display: block;
+  margin-top: 10px;
+  color: #173c28;
+  font-size: 16px;
+  line-height: 1.3;
 }
 
 .pgy-exporter-status {
-  min-height: 38px;
-  padding: 8px 10px;
-  color: #2b4638;
-  background: #eaf2e8;
-  border: 1px solid rgba(31, 90, 62, 0.18);
+  min-height: 18px;
+  margin: 5px 0 0;
+  color: #63756b;
+  font-size: 12px;
   word-break: break-word;
 }
 
 .pgy-exporter-status.is-error {
   color: #8a261f;
-  background: #fff0ec;
-  border-color: rgba(168, 56, 44, 0.32);
+}
+
+.pgy-exporter-progress {
+  height: 6px;
+  margin-top: 13px;
+  overflow: hidden;
+  background: #e3e9df;
+  border-radius: 999px;
+}
+
+.pgy-exporter-progress span {
+  display: block;
+  width: 0;
+  height: 100%;
+  background: linear-gradient(90deg, #2e7548, #91bd42, #d7f55f);
+  border-radius: inherit;
+  transition: width 260ms ease;
+}
+
+.pgy-exporter-meta {
+  margin-top: 8px;
+  color: #718178;
+  font-size: 10px;
+  letter-spacing: 0.2px;
+}
+
+.pgy-exporter-task[data-phase="list"] .pgy-exporter-task-state i,
+.pgy-exporter-task[data-phase="detail"] .pgy-exporter-task-state i,
+.pgy-exporter-task[data-phase="file"] .pgy-exporter-task-state i,
+.pgy-exporter-task[data-phase="stopping"] .pgy-exporter-task-state i {
+  background: #8fba39;
+  animation: pgy-exporter-pulse 1.25s ease-out infinite;
+}
+
+.pgy-exporter-task[data-phase="detail"] .pgy-exporter-progress span,
+.pgy-exporter-task[data-phase="file"] .pgy-exporter-progress span {
+  width: 100% !important;
+  background-size: 200% 100%;
+  animation: pgy-exporter-scan 1.15s linear infinite;
+}
+
+.pgy-exporter-task[data-phase="done"] .pgy-exporter-task-state i {
+  background: #2e9d5b;
+  box-shadow: 0 0 0 4px rgba(46, 157, 91, 0.14);
+}
+
+.pgy-exporter-task[data-phase="done"] .pgy-exporter-progress span {
+  width: 100% !important;
+}
+
+.pgy-exporter-task[data-phase="error"] {
+  border-color: rgba(177, 61, 46, 0.35);
+  background: #fff8f4;
+}
+
+.pgy-exporter-task[data-phase="error"] .pgy-exporter-task-state i {
+  background: #c84939;
+  box-shadow: 0 0 0 4px rgba(200, 73, 57, 0.14);
+}
+
+.pgy-exporter-task[data-phase="stopped"] .pgy-exporter-task-state i {
+  background: #d18b2e;
+  box-shadow: 0 0 0 4px rgba(209, 139, 46, 0.14);
 }
 
 .pgy-exporter-actions {
   display: grid;
-  grid-template-columns: 1fr;
-  gap: 8px;
-  margin-top: 10px;
+  grid-template-columns: 1fr 1fr;
+  gap: 7px;
+  margin-top: 9px;
 }
 
 .pgy-exporter-actions button {
-  height: 34px;
+  min-height: 34px;
+  padding: 5px 8px;
   border: 1px solid rgba(31, 90, 62, 0.28);
+  border-radius: 8px;
   color: #143f2c;
-  background: #ffffff;
+  background: rgba(255, 255, 255, 0.92);
   cursor: pointer;
+  transition: transform 150ms ease, background 150ms ease, border-color 150ms ease;
 }
 
 .pgy-exporter-actions button:hover {
   background: #edf6ea;
+  border-color: rgba(31, 90, 62, 0.46);
+  transform: translateY(-1px);
+}
+
+.pgy-exporter-actions button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+  transform: none;
+}
+
+.pgy-exporter-actions button[data-action="export"],
+.pgy-exporter-actions button[data-action="sync"] {
+  color: #f7ffe9;
+  background: #245d3c;
+  border-color: #245d3c;
+}
+
+.pgy-exporter-actions button[data-action="export"]:hover,
+.pgy-exporter-actions button[data-action="sync"]:hover {
+  background: #1b4d31;
+}
+
+.pgy-exporter-actions button[data-action="stop"] {
+  color: #a54134;
+  border-color: rgba(165, 65, 52, 0.3);
+}
+
+.pgy-exporter-actions button[data-action="invite"] {
+  color: #ffffff;
+  background: #2f6df6;
+  border-color: #2f6df6;
+}
+
+.pgy-exporter-actions button[data-action="side-settings"],
+.pgy-exporter-actions button[data-action="feishu-settings"] {
+  color: #647269;
+  font-size: 11px;
+}
+
+.pgy-exporter-actions button[data-action="invite"]:hover {
+  background: #245be0;
 }
 
 #pgy-exporter-panel.is-collapsed {
-  width: 168px;
+  width: 184px;
+}
+
+@keyframes pgy-exporter-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(143, 186, 57, 0.42); }
+  70% { box-shadow: 0 0 0 7px rgba(143, 186, 57, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(143, 186, 57, 0); }
+}
+
+@keyframes pgy-exporter-scan {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 
 #pgy-exporter-panel.is-collapsed .pgy-exporter-body {
@@ -90,4 +295,417 @@
 
 #pgy-exporter-panel.pgy-exporter-repaint {
   transform: translate3d(0, 0, 0) scale(1);
+}
+
+#pgy-invite-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  font: 14px/1.45 "Microsoft YaHei", "PingFang SC", sans-serif;
+  color: #263244;
+}
+
+.pgy-invite-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(10, 15, 24, 0.54);
+}
+
+.pgy-invite-dialog {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  display: flex;
+  flex-direction: column;
+  width: min(960px, calc(100vw - 40px));
+  max-height: min(820px, calc(100vh - 40px));
+  overflow: hidden;
+  background: #eef5ff;
+  border-radius: 14px;
+  box-shadow: 0 28px 70px rgba(0, 0, 0, 0.28);
+  transform: translate(-50%, -50%);
+}
+
+.pgy-invite-header,
+.pgy-invite-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 24px;
+}
+
+.pgy-invite-header {
+  border-bottom: 1px solid rgba(73, 106, 150, 0.18);
+}
+
+.pgy-invite-header strong {
+  display: block;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.pgy-invite-header span {
+  color: #65728a;
+}
+
+.pgy-invite-header button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  color: #758196;
+  background: transparent;
+  font-size: 28px;
+  cursor: pointer;
+}
+
+.pgy-invite-steps {
+  display: flex;
+  gap: 8px;
+  padding: 14px 24px 0;
+}
+
+.pgy-invite-steps span,
+.pgy-invite-steps button {
+  min-width: 74px;
+  padding: 5px 10px;
+  font: inherit;
+  color: #6f7d94;
+  background: rgba(255, 255, 255, 0.66);
+  border: 1px solid rgba(114, 137, 176, 0.22);
+  border-radius: 999px;
+  text-align: center;
+}
+
+.pgy-invite-steps button {
+  cursor: pointer;
+}
+
+.pgy-invite-steps button:disabled {
+  cursor: default;
+}
+
+.pgy-invite-steps button.is-clickable:hover {
+  color: #477cf5;
+  border-color: rgba(71, 124, 245, 0.5);
+}
+
+.pgy-invite-steps .is-active {
+  color: #ffffff;
+  background: #477cf5;
+  border-color: #477cf5;
+}
+
+.pgy-invite-main {
+  overflow: auto;
+  padding: 20px 24px;
+}
+
+.pgy-invite-field {
+  position: relative;
+  display: grid;
+  grid-template-columns: 126px minmax(0, 1fr);
+  align-items: start;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.pgy-invite-field > span {
+  padding-top: 11px;
+  color: #344052;
+  text-align: right;
+}
+
+.pgy-invite-field input,
+.pgy-invite-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  border: 1px solid #d5e0f2;
+  border-radius: 8px;
+  color: #263244;
+  background: #ffffff;
+  font: inherit;
+  outline: none;
+}
+
+.pgy-invite-field input {
+  height: 42px;
+  padding: 0 12px;
+}
+
+.pgy-invite-field textarea {
+  min-height: 230px;
+  padding: 12px;
+  resize: vertical;
+}
+
+.pgy-invite-field input:focus,
+.pgy-invite-field textarea:focus {
+  border-color: #477cf5;
+  box-shadow: 0 0 0 3px rgba(71, 124, 245, 0.14);
+}
+
+.pgy-invite-field em {
+  position: absolute;
+  right: 12px;
+  bottom: 10px;
+  color: #7a8494;
+  font-style: normal;
+}
+
+.pgy-invite-note {
+  margin: -4px 0 16px 138px;
+  color: #758196;
+}
+
+.pgy-invite-bloggers {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.pgy-invite-blogger {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 10px;
+  background: #ffffff;
+  border: 1px solid rgba(114, 137, 176, 0.18);
+  border-radius: 8px;
+}
+
+.pgy-invite-blogger.is-error {
+  border-color: rgba(199, 70, 55, 0.35);
+  background: #fff3f1;
+}
+
+.pgy-invite-blogger img {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 42px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #d8e2f4;
+}
+
+.pgy-invite-blogger strong,
+.pgy-invite-blogger span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pgy-invite-blogger span {
+  color: #758196;
+  font-size: 12px;
+}
+
+.pgy-invite-form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  column-gap: 18px;
+}
+
+.pgy-invite-wide {
+  grid-column: 1 / -1;
+}
+
+.pgy-invite-wide textarea {
+  min-height: 128px;
+}
+
+.pgy-invite-radio-row {
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  min-height: 42px;
+}
+
+.pgy-invite-radio-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+
+.pgy-invite-date-range {
+  grid-template-columns: 126px minmax(0, 1fr) minmax(0, 1fr);
+}
+
+.pgy-invite-brand-menu {
+  position: absolute;
+  top: 46px;
+  left: 138px;
+  right: 0;
+  max-height: 300px;
+  overflow: auto;
+  padding: 6px;
+  background: #ffffff;
+  border: 1px solid #d5e0f2;
+  border-radius: 8px;
+  box-shadow: 0 14px 34px rgba(38, 50, 68, 0.16);
+  z-index: 2;
+}
+
+.pgy-invite-brand-menu button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  gap: 10px;
+  padding: 9px;
+  border: 0;
+  border-radius: 6px;
+  color: #263244;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pgy-invite-brand-menu button:hover {
+  background: #f1f5ff;
+}
+
+.pgy-invite-brand-menu button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.pgy-invite-brand-menu img {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #d8e2f4;
+}
+
+.pgy-invite-brand-menu strong,
+.pgy-invite-brand-menu small {
+  display: block;
+}
+
+.pgy-invite-brand-menu small,
+.pgy-invite-empty {
+  color: #758196;
+}
+
+.pgy-invite-empty {
+  padding: 10px;
+}
+
+.pgy-invite-draft {
+  margin-top: 8px;
+  border: 1px solid rgba(114, 137, 176, 0.22);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.pgy-invite-draft-head {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: #f7f9fe;
+  border-bottom: 1px solid rgba(114, 137, 176, 0.16);
+}
+
+.pgy-invite-draft-head span {
+  color: #d14b3c;
+}
+
+.pgy-invite-draft pre {
+  max-height: 180px;
+  margin: 0;
+  overflow: auto;
+  padding: 12px;
+  color: #344052;
+  font: 12px/1.5 Consolas, "Microsoft YaHei", monospace;
+}
+
+.pgy-invite-submit-result {
+  margin-top: 8px;
+  border: 1px solid rgba(114, 137, 176, 0.22);
+  border-radius: 8px;
+  overflow: hidden;
+  background: #ffffff;
+}
+
+.pgy-invite-submit-list {
+  max-height: 180px;
+  overflow: auto;
+  padding: 8px 12px;
+}
+
+.pgy-invite-submit-list div {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(160px, 2fr);
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid rgba(114, 137, 176, 0.12);
+  font-size: 12px;
+}
+
+.pgy-invite-submit-list div:last-child {
+  border-bottom: 0;
+}
+
+.pgy-invite-submit-list strong,
+.pgy-invite-submit-list span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pgy-invite-submit-list .is-ok span {
+  color: #14804a;
+}
+
+.pgy-invite-submit-list .is-error span {
+  color: #b64234;
+}
+
+.pgy-invite-footer {
+  border-top: 1px solid rgba(73, 106, 150, 0.18);
+  background: rgba(255, 255, 255, 0.48);
+}
+
+.pgy-invite-message {
+  flex: 1;
+  min-width: 0;
+  color: #63708a;
+  word-break: break-word;
+}
+
+.pgy-invite-message.is-error {
+  color: #b64234;
+}
+
+.pgy-invite-footer button {
+  min-width: 92px;
+  height: 40px;
+  border: 1px solid #d5e0f2;
+  border-radius: 8px;
+  color: #536176;
+  background: #ffffff;
+  cursor: pointer;
+}
+
+.pgy-invite-footer button.is-primary {
+  color: #ffffff;
+  background: #477cf5;
+  border-color: #477cf5;
+}
+
+.pgy-invite-footer button.is-danger {
+  color: #ffffff;
+  background: #c84a3a;
+  border-color: #c84a3a;
+}
+
+.pgy-invite-footer button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }

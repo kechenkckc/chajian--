@@ -1,5 +1,7 @@
 const FEISHU_BASE = "https://open.feishu.cn/open-apis";
 const DEFAULT_SHEET_RANGE = "A1:ZZ1";
+const BITABLE_TEXT_FIELD_TYPE = 1;
+const BITABLE_ATTACHMENT_FIELD_TYPE = 17;
 const DETAIL_FIELDS = [
   "详情补采状态",
   "详情补采时间",
@@ -13,6 +15,8 @@ const DETAIL_FIELDS = [
   "笔记数据文本",
   "女性粉丝占比",
   "男性粉丝占比",
+  "所属机构",
+  "<18粉丝占比",
   "18-24粉丝占比",
   "25-34粉丝占比",
   "35-44粉丝占比",
@@ -26,8 +30,10 @@ const DETAIL_FIELDS = [
   "粉丝性别分布",
   "粉丝年龄分布",
   "粉丝地域分布",
+  "粉丝城市分布",
   "用户设备分布",
   "用户兴趣",
+  "用户兴趣分布",
   "近7天活跃天数",
   "近期笔记JSON",
   "详情原始JSON",
@@ -43,14 +49,21 @@ let tokenCache = {
 let detailStopRequested = false;
 let detailCaptureLock = Promise.resolve();
 let detailOpenTabGate = Promise.resolve();
+let detailFastTabId = 0;
 const DETAIL_BACKFILL_CONCURRENCY = 2;
 const DETAIL_OPEN_TAB_STAGGER_MS = 1500;
 const DETAIL_REQUEST_DELAY_MIN_MS = 1000;
 const DETAIL_REQUEST_DELAY_MAX_MS = 3000;
+const DETAIL_FAST_REQUEST_DELAY_MIN_MS = 100;
+const DETAIL_FAST_REQUEST_DELAY_MAX_MS = 300;
 const DETAIL_RATE_LIMIT_COOLDOWN_MS = 3 * 60 * 1000;
 const DETAIL_RATE_LIMIT_MAX_RETRIES = 3;
 const DETAIL_HEADLESS_MODE = true;
 const DETAIL_HEADLESS_CAPTURE_SCREENSHOTS = true;
+const DETAIL_FAST_API_MODE = true;
+const SHEET_WRITE_RETRY_DELAY_MS = 800;
+const SHEET_WRITE_VERIFY_DELAY_MS = 1000;
+const SHEET_WRITE_VERIFY_RETRIES = 2;
 const DETAIL_NOTIFICATION_ICON =
   "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' rx='24' fill='%232f6bff'/%3E%3Cpath fill='white' d='M31 36h66v12H31zm0 22h66v12H31zm0 22h42v12H31z'/%3E%3C/svg%3E";
 
@@ -118,40 +131,48 @@ const STANDARD_FIELDS = [
   "蒲公英原始JSON"
 ];
 
+const REFERENCE_EXPORT_HEADER_ROWS = [
+  ["基础信息", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "数据概览", "", "", "", "", "", "", "数据表现", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "粉丝分析", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+  ["基础数据", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "其它", "", "", "", "笔记数据-按规模-日常笔记", "", "", "笔记数据-按规模-合作笔记", "", "", "", "近90天、合作笔记、图文+视频、全部流量", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "核心指标", "", "", "", "", "", "粉丝画像", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", ""],
+  ["博主ID", "小红书号", "昵称", "性别", "所属机构", "粉丝数（万）", "赞藏数（万）", "博主人设", "内容类型", "地理位置", "小红书主页", "蒲公英主页", "健康等级", "下月健康等级", "图文笔记一口价", "视频笔记一口价", "图文笔记一口价(含平台服务费)", "视频笔记一口价(含平台服务费)", "图文笔记接单状态", "视频笔记接单状态", "添加人", "添加时间", "备注", "审核状态", "曝光中位数", "阅读中位数", "互动中位数", "曝光中位数", "阅读中位数", "互动中位数", "外溢进店中位数", "发布笔记", "曝光中位数", "阅读中位数", "互动中位数", "预估CPM", "预估阅读单价", "预估互动单价", "中位点赞量", "中位收藏量", "中位评论量", "中位分享量", "中位关注量", "互动率", "千赞笔记比例", "百赞笔记比例", "视频完播率", "图文3秒阅读率", "粉丝增量", "粉丝量变化幅度", "活跃粉丝占比", "阅读粉丝占比", "互动粉丝占比", "下单粉丝占比", "性别分布-男粉占比", "性别分布-女粉占比", "年龄分布-占比最高年龄段", "年龄分布-<18", "年龄分布-18-24", "年龄分布-25-34", "年龄分布-35-44", "年龄分布->44", "地域分布(省)-TOP1", "地域分布(省)-TOP2", "地域分布(省)-TOP3", "地域分布(省)-TOP4", "地域分布(省)-TOP5", "地域分布(省)-TOP6", "地域分布(省)-TOP7", "地域分布(市)-TOP1", "地域分布(市)-TOP2", "地域分布(市)-TOP3", "地域分布(市)-TOP4", "地域分布(市)-TOP5", "地域分布(市)-TOP6", "地域分布(市)-TOP7", "用户设备分布-TOP1", "用户设备分布-TOP2", "用户设备分布-TOP3", "用户设备分布-TOP4", "用户设备分布-TOP5", "用户设备分布-TOP6", "用户设备分布-TOP7", "兴趣分布-TOP1", "兴趣分布-TOP2", "兴趣分布-TOP3", "兴趣分布-TOP4", "兴趣分布-TOP5", "兴趣分布-TOP6", "兴趣分布-TOP7"]
+];
+
 const FIELD_ALIASES = {
   "达人ID": ["达人ID", "博主ID", "账号ID", "creator_id", "userId", "bloggerId", "kolId"],
-  "达人昵称": ["达人昵称", "达人名称", "博主昵称", "博主名称", "昵称", "nickname", "nickName", "name"],
-  "达人名称": ["达人名称", "达人昵称", "博主名称", "博主昵称", "昵称", "nickname", "nickName", "name"],
-  "蒲公英链接": ["蒲公英链接", "蒲公英达人链接", "达人链接", "博主链接", "蒲公英/LINK", "蒲公英link", "ID/Link", "蒲公英链接/星图链接", "pgy_url"],
+  "达人昵称": ["达人昵称", "达人名称", "达人名", "博主昵称", "博主名称", "博主名", "昵称", "账号昵称", "账号名称", "红书达人", "kol", "nickname", "nickName", "name"],
+  "达人名称": ["达人名称", "达人昵称", "达人名", "博主名称", "博主昵称", "博主名", "昵称", "账号昵称", "账号名称", "红书达人", "nickname", "nickName", "name"],
+  "蒲公英链接": ["蒲公英链接", "蒲公英主页", "蒲公英达人主页", "蒲公英达人链接", "达人链接", "博主链接", "蒲公英/LINK", "蒲公英link", "ID/Link", "蒲公英链接/星图链接", "pgy_url"],
   "主页链接": ["主页链接", "小红书主页", "小红书链接", "profile_url"],
-  "小红书号": ["小红书号", "小红书ID", "redId", "xiaohongshu_id"],
+  "小红书号": ["小红书号", "红书号", "小红书ID", "小红书账号", "小红书号ID", "redId", "red_id", "redID", "redBookId", "redbookId", "red_book_id", "xiaohongshuId", "xiaohongshu_id", "xhsId", "xhs_id"],
   "粉丝数": ["粉丝数", "粉丝量", "followers_count", "fansNum", "fansCount", "fans_count", "followerCount", "followersCount"],
-  "粉丝数w": ["粉丝数w", "粉丝量（w）", "followers_w"],
-  "获赞与收藏": ["获赞与收藏", "赞藏数", "赞藏量", "liked_collected_count", "likeCollectCountInfo", "likedCollectedCount", "likeCollectCount"],
+  "粉丝数w": ["粉丝数w", "粉丝量（w）", "粉丝数(w）", "粉丝数（w）", "粉丝量(w)", "粉丝量（万）", "粉丝数（万）", "粉丝数万", "粉丝量级", "账号量级", "followers_w"],
+  "获赞与收藏": ["获赞与收藏", "赞藏数", "赞藏量", "赞藏数（万）", "liked_collected_count", "likeCollectCountInfo", "likedCollectedCount", "likeCollectCount"],
   "平台报价": ["平台报价", "报价", "合作报价", "图文报价", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice", "price"],
-  "图文报价": ["图文报价", "图文笔记一口价", "图文笔记报价", "图文价格", "报备图文", "报备图文（不含平台服务费）", "报备图文 不含平台服务费", "图文价格（不含平台服务费）", "图文价格 不含平台服务费", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice"],
-  "视频报价": ["视频报价", "视频笔记一口价", "视频笔记报价", "视频价格", "报备视频价格", "报备视频价格（不含平台服务费）", "报备视频价格 不含平台服务费", "视频价格（不含平台服务费）", "视频价格 不含平台服务费", "video_quote_price", "videoPrice"],
+  "图文报价": ["图文报价", "图文笔记一口价", "图文笔记一口价(含平台服务费)", "图文笔记报价", "图文价格", "图文裸价", "报备图文", "报备图文裸价", "报备图文价格", "报备图文（不含平台服务费）", "报备图文 不含平台服务费", "图文价格（不含平台服务费）", "图文价格 不含平台服务费", "quote_price", "picturePrice", "quotePrice", "imageQuotePrice", "picPrice"],
+  "视频报价": ["视频报价", "视频笔记一口价", "视频笔记一口价(含平台服务费)", "视频笔记报价", "视频价格", "视频裸价", "报备视频裸价", "报备视频价格", "报备视频价格（不含平台服务费）", "报备视频价格 不含平台服务费", "视频价格（不含平台服务费）", "视频价格 不含平台服务费", "video_quote_price", "videoPrice"],
   "笔记类型": ["笔记类型", "内容形式", "note_type", "noteType", "contentType"],
   "合作订单数": ["合作订单数", "已合作订单数", "商单数", "商业笔记数", "cooperation_order_count", "progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt"],
   "已合作笔记数": ["已合作笔记数", "已合作笔记", "合作笔记数", "商业笔记数", "cooperation_note_count", "businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d", "progressOrderCnt"],
   "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "曝光量", "预估曝光量", "达人历史平均曝光量", "达人历史 平均曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
   "阅读中位数（日常）": ["阅读中位数（日常）", "阅读中位数", "日常阅读中位数", "阅读量", "平均阅读量", "达人历史平均阅读量", "达人历史/平均阅读量", "达人历史 平均阅读量", "平均播放量/阅读量", "达人历史平均曝光量/阅读量/互动总量", "daily_read_median", "clickMidNum", "readMedian", "readMedianNum"],
   "互动中位数（日常）": ["互动中位数（日常）", "日常互动中位数", "互动", "预估互动", "平均互动量", "达人历史平均互动总量", "达人历史 平均互动总量", "达人历史平均曝光量/阅读量/互动总量", "daily_interaction_median", "mEngagementNum", "mengagementNum", "interactionMedian"],
-  "曝光中位数（合作）": ["曝光中位数（合作）", "合作曝光中位数", "cooperation_exposure_median", "accumCoopImpMedinNum30d"],
-  "阅读中位数（合作）": ["阅读中位数（合作）", "合作阅读中位数", "cooperation_read_median", "readMidCoop30"],
-  "互动中位数（合作）": ["互动中位数（合作）", "合作互动中位数", "cooperation_interaction_median", "interMidCoop30"],
-  "图文预估阅读单价": ["图文预估阅读单价", "图文笔记阅读单价", "image_read_unit_price", "pictureReadCost", "pictureReadUnitPrice", "imageReadUnitPrice"],
-  "图文预估互动单价": ["图文预估互动单价", "图文笔记互动单价", "image_interaction_unit_price", "estimatePictureEngageCost", "pictureInteractionUnitPrice", "imageInteractionUnitPrice"],
-  "视频预估阅读单价": ["视频预估阅读单价", "视频笔记阅读单价", "video_read_unit_price", "videoReadCost", "videoReadCostV2", "videoReadUnitPrice"],
-  "视频预估互动单价": ["视频预估互动单价", "视频笔记互动单价", "video_interaction_unit_price", "estimateVideoEngageCost", "videoInteractionUnitPrice"],
-  "完播率": ["完播率", "视频完播率", "视频播放完成率", "video_completion_rate", "videoFullViewRate"],
-  "CPM": ["CPM", "cpm"],
-  "CPE": ["CPE", "cpe", "互动成本", "互动单价"],
+  "曝光中位数（合作）": ["曝光中位数（合作）", "合作曝光中位数", "曝光中位数（合作30天）", "曝光中位数 合作30天", "合作30天曝光中位数", "合作曝光30天", "cooperation_exposure_median", "accumCoopImpMedinNum30d"],
+  "阅读中位数（合作）": ["阅读中位数（合作）", "合作阅读中位数", "阅读中位数（合作30天）", "阅读中位数 合作30天", "合作30天阅读中位数", "图文3s阅读（合作30天）", "图文3s阅读 合作30天", "cooperation_read_median", "readMidCoop30"],
+  "互动中位数（合作）": ["互动中位数（合作）", "合作互动中位数", "互动中位数（合作30天）", "互动中位数 合作30天", "合作30天互动中位数", "cooperation_interaction_median", "interMidCoop30"],
+  "图文预估阅读单价": ["图文预估阅读单价", "图文笔记阅读单价", "图文阅读单价", "CPR（图文）", "图文CPR", "image_read_unit_price", "pictureReadCost", "pictureReadUnitPrice", "imageReadUnitPrice"],
+  "图文预估互动单价": ["图文预估互动单价", "图文笔记互动单价", "图文互动单价", "CPE（图文）", "图文CPE", "image_interaction_unit_price", "estimatePictureEngageCost", "pictureInteractionUnitPrice", "imageInteractionUnitPrice"],
+  "视频预估阅读单价": ["视频预估阅读单价", "视频笔记阅读单价", "视频阅读单价", "CPR（视频）", "视频CPR", "video_read_unit_price", "videoReadCost", "videoReadCostV2", "videoReadUnitPrice"],
+  "视频预估互动单价": ["视频预估互动单价", "视频笔记互动单价", "视频互动单价", "CPE（视频）", "视频CPE", "video_interaction_unit_price", "estimateVideoEngageCost", "videoInteractionUnitPrice"],
+  "完播率": ["完播率", "视频完播率", "视频播放完成率", "视频完播率（合作30天）", "视频完播率 合作30天", "video_completion_rate", "videoFullViewRate", "videoFullViewRate30", "videoFinishRate", "video_finish_rate", "video_complete_rate"],
+  "图文3秒阅读率": ["图文3秒阅读率", "图文3s阅读率", "图文3秒读完率", "图文3s读完率", "图文3秒阅读", "图文3s阅读", "3秒阅读率", "3s阅读率", "picture_3s_read_rate", "picture3sViewRate", "picture3sViewRate30", "picture3sReadRate", "pictureThreeSecondReadRate", "pic3sReadRate"],
+  "CPM": ["CPM", "cpm", "CPM（视频）", "CPM（图文）", "视频CPM", "图文CPM", "estimatePictureCpm", "estimateVideoCpm"],
+  "CPE": ["CPE", "cpe", "互动成本", "互动单价", "CPE（视频）", "CPE（图文）", "视频CPE", "图文CPE"],
   "邀约48h回复率": ["邀约48h回复率", "邀约48小时回复率", "回复率", "reply_rate_48h", "inviteReply48hNumRatio", "responseRate", "replyRate48h"],
-  "账号类型": ["账号类型", "达人类型", "博主类目", "creator_type", "categoryName", "category"],
-  "IP城市": ["IP城市", "城市", "地域", "ip_city", "location", "city"],
+  "账号类型": ["账号类型", "达人类型", "达人标签", "博主类目", "博主标签", "账号标签", "内容类型", "内容标签", "creator_type", "categoryName", "category", "contentTags", "tradeType", "industryTag", "type"],
+  "IP城市": ["IP城市", "城市", "地域", "地理位置", "ip_city", "location", "city"],
+  "所属机构": ["所属机构", "机构", "MCN", "mcnName", "mcn_name", "agencyName", "organizationName", "orgName", "companyName", "bloggerCompany", "organization_name"],
   "数据来源": ["数据来源", "source"],
-  "采集时间": ["采集时间", "collected_at"],
+  "采集时间": ["采集时间", "添加时间", "collected_at"],
   "详情补采状态": ["详情补采状态", "detail_status"],
   "详情补采时间": ["详情补采时间", "detail_collected_at"],
   "详情完整度": ["详情完整度", "detail_completeness", "information_completeness"],
@@ -164,21 +185,24 @@ const FIELD_ALIASES = {
   "笔记数据文本": ["笔记数据文本", "note_data_text"],
   "女性粉丝占比": ["女性粉丝占比", "female_fans_ratio"],
   "男性粉丝占比": ["男性粉丝占比", "male_fans_ratio"],
-  "18-24粉丝占比": ["18-24粉丝占比", "fans_18_24_ratio"],
-  "25-34粉丝占比": ["25-34粉丝占比", "fans_25_34_ratio"],
-  "35-44粉丝占比": ["35-44粉丝占比", "fans_35_44_ratio"],
+  "<18粉丝占比": ["<18粉丝占比", "年龄分布-<18", "18岁以下粉丝占比", "fans_under_18_ratio", "fans_0_17_ratio", "fans_lt_18_ratio"],
+  "18-24粉丝占比": ["18-24粉丝占比", "18~24粉丝占比", "18～24粉丝占比", "年龄分布-18-24", "18-24岁粉丝占比", "18~24岁粉丝占比", "18至24岁粉丝占比", "fans_18_24_ratio"],
+  "25-34粉丝占比": ["25-34粉丝占比", "25~34粉丝占比", "25～34粉丝占比", "年龄分布-25-34", "25-34岁粉丝占比", "25~34岁粉丝占比", "25至34岁粉丝占比", "fans_25_34_ratio"],
+  "35-44粉丝占比": ["35-44粉丝占比", "35~44粉丝占比", "35～44粉丝占比", "年龄分布-35-44", "35-44岁粉丝占比", "35~44岁粉丝占比", "35至44岁粉丝占比", "fans_35_44_ratio"],
   "44岁以上粉丝占比": ["44岁以上粉丝占比", "fans_44_plus_ratio"],
   "35岁以上粉丝占比": ["35岁以上粉丝占比", "fans_35_plus_ratio"],
-  "活跃粉丝占比": ["活跃粉丝占比", "active_fans_ratio"],
+  "活跃粉丝占比": ["活跃粉丝占比", "active_fans_ratio", "fansActiveIn28dLv"],
   "阅读粉丝占比": ["阅读粉丝占比", "read_fans_ratio"],
-  "互动粉丝占比": ["互动粉丝占比", "interaction_fans_ratio"],
+  "互动粉丝占比": ["互动粉丝占比", "interaction_fans_ratio", "fansEngageNum30dLv"],
   "下单粉丝占比": ["下单粉丝占比", "order_fans_ratio"],
-  "粉丝增长率": ["粉丝增长率", "fans_growth_ratio"],
+  "粉丝增长率": ["粉丝增长率", "粉丝量变化幅度", "粉丝变化幅度", "涨粉率", "粉丝增长率30天", "fans_growth_ratio", "fansGrowthRate", "fans30GrowthRate", "fans_growth_rate"],
   "粉丝性别分布": ["粉丝性别分布", "audience_gender_distribution"],
   "粉丝年龄分布": ["粉丝年龄分布", "audience_age_distribution"],
   "粉丝地域分布": ["粉丝地域分布", "audience_region_distribution"],
+  "粉丝城市分布": ["粉丝城市分布", "audience_city_distribution", "cityDistribution", "city_distribution"],
   "用户设备分布": ["用户设备分布", "audience_device_distribution"],
   "用户兴趣": ["用户兴趣", "topic_point"],
+  "用户兴趣分布": ["用户兴趣分布", "audience_interest_distribution", "interestDistribution", "interest_distribution"],
   "近7天活跃天数": ["近7天活跃天数", "active_days_7d"],
   "近期笔记JSON": ["近期笔记JSON", "recent_notes_json"],
   "详情原始JSON": ["详情原始JSON", "detail_raw_json"],
@@ -212,11 +236,10 @@ function cellText(value) {
 
 function normalizeKey(value) {
   return cellText(value)
+    .normalize("NFKC")
     .trim()
     .toLowerCase()
-    .replace(/[()\[\]{}_\-\s/\\.:：，,。"'“”‘’]/g, "")
-    .replace(/（/g, "")
-    .replace(/）/g, "");
+    .replace(/[()\[\]{}<>《》【】「」『』_\-\s/\\.:：，,。、;；|｜"'“”‘’]/g, "");
 }
 
 function nestedValue(payload, keys) {
@@ -271,6 +294,17 @@ function fallbackLikedCollectedValue(row) {
       /(count|cnt|num|total|info|数|量)/i.test(normalized) &&
       !/(rate|ratio|percent|unit|price|cost|state|status|iscollect|inCart)/i.test(normalized);
   });
+}
+
+function fallbackRedIdValue(row) {
+  const raw = row?.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : row;
+  const direct = nestedValue(raw, ["redId", "red_id", "redID", "redBookId", "redbookId", "red_book_id", "xiaohongshuId", "xiaohongshu_id", "xhsId", "xhs_id"]);
+  if (direct) return direct;
+  const byKey = deepFindByKeyPattern(raw, (key) => /^(red_?id|redbook_?id|xiaohongshu_?id|xhs_?id)$/i.test(key));
+  if (byKey) return byKey;
+  const text = cellText(raw?.detail_text || raw?.raw_text || raw?.text || "");
+  const match = text.match(/(?:小红书号|红书号|小红书ID|小红书账号)\s*[:：]?\s*([A-Za-z0-9._-]{3,})/i);
+  return match ? match[1] : "";
 }
 
 function fallbackNoteTypeValue(row) {
@@ -340,16 +374,18 @@ function valueByAliases(row, targetField) {
 }
 
 function detailUrl(userId) {
-  return userId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}` : "";
+  const cleanId = cleanPgyUserId(userId);
+  return cleanId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${cleanId}` : "";
 }
 
 function profileUrl(userId) {
-  return userId ? `https://www.xiaohongshu.com/user/profile/${userId}` : "";
+  const cleanId = cleanPgyUserId(userId);
+  return cleanId ? `https://www.xiaohongshu.com/user/profile/${cleanId}` : "";
 }
 
 function normalizeExportRow(row) {
   const raw = row?.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : row;
-  const userId = valueByAliases(row, "达人ID") || nestedValue(raw, ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id"]);
+  const userId = cleanPgyUserId(valueByAliases(row, "达人ID") || nestedValue(raw, ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id"]));
   const nickname = valueByAliases(row, "达人昵称") || nestedValue(raw, ["name", "nickName", "nickname"]);
   const followers = valueByAliases(row, "粉丝数") || fallbackFollowersValue(row);
   const followersNumber = numericValue(followers);
@@ -359,7 +395,7 @@ function normalizeExportRow(row) {
     "达人名称": valueByAliases(row, "达人名称") || nickname || "",
     "蒲公英链接": valueByAliases(row, "蒲公英链接") || row?.pgy_url || detailUrl(userId),
     "主页链接": valueByAliases(row, "主页链接") || row?.profile_url || profileUrl(userId),
-    "小红书号": valueByAliases(row, "小红书号"),
+    "小红书号": valueByAliases(row, "小红书号") || fallbackRedIdValue(row),
     "粉丝数": followersNumber,
     "粉丝数w": valueByAliases(row, "粉丝数w") || (Number(followersNumber) ? Math.round((Number(followersNumber) / 10000) * 10000) / 10000 : ""),
     "获赞与收藏": numericValue(valueByAliases(row, "获赞与收藏") || fallbackLikedCollectedValue(row)),
@@ -383,7 +419,9 @@ function normalizeExportRow(row) {
     "视频预估阅读单价": numericValue(valueByAliases(row, "视频预估阅读单价")),
     "视频预估互动单价": numericValue(valueByAliases(row, "视频预估互动单价")),
     "邀约48h回复率": valueByAliases(row, "邀约48h回复率"),
-    "账号类型": valueByAliases(row, "账号类型"),
+    "图文3秒阅读率": valueByAliases(row, "图文3秒阅读率"),
+    "粉丝增长率": valueByAliases(row, "粉丝增长率"),
+    "账号类型": compactTagText(valueByAliases(row, "账号类型") || rawValueByKeys(row, ["contentTags", "tradeType", "industryTag", "type"])),
     "IP城市": valueByAliases(row, "IP城市"),
     "数据来源": valueByAliases(row, "数据来源") || "pgy_browser_extension",
     "采集时间": valueByAliases(row, "采集时间") || new Date().toISOString().slice(0, 19).replace("T", " "),
@@ -394,15 +432,18 @@ function normalizeExportRow(row) {
 
 function rowsToCsv(rows) {
   const normalized = rows.map(normalizeExportRow);
-  const fields = [
-    ...STANDARD_FIELDS,
-    ...Array.from(new Set(normalized.flatMap((row) => Object.keys(row || {}))))
-      .filter((key) => !STANDARD_FIELDS.includes(key) && key !== "raw_payload")
-      .sort()
-  ];
-  const lines = [fields.map(escapeCsvCell).join(",")];
-  for (const row of normalized) lines.push(fields.map((field) => escapeCsvCell(row?.[field])).join(","));
+  const lines = referenceExportHeaderRows().map((line) => line.map(escapeCsvCell).join(","));
+  for (const row of normalized) {
+    lines.push(REFERENCE_EXPORT_COLUMNS.map((column) => escapeCsvCell(valueForReferenceColumn(row, column))).join(","));
+  }
   return `\uFEFF${lines.join("\r\n")}`;
+}
+
+function exportCsvFilename(count) {
+  const now = new Date();
+  const part = (value) => String(value).padStart(2, "0");
+  const time = `${now.getFullYear()}-${part(now.getMonth() + 1)}-${part(now.getDate())}-${part(now.getHours())}-${part(now.getMinutes())}-${part(now.getSeconds())}`;
+  return `蒲公英达人导出-${Number(count || 0)}人-${time}.csv`;
 }
 
 function columnName(index) {
@@ -446,6 +487,13 @@ function dataUrlBytes(dataUrl) {
   return base64ToBytes(dataUrlBase64(dataUrl));
 }
 
+function dataUrlBlob(dataUrl, fallbackType = "image/png") {
+  const match = String(dataUrl || "").match(/^data:([^;,]+)?;base64,(.*)$/);
+  const contentType = match?.[1] || fallbackType;
+  const bytes = new Uint8Array(base64ToBytes(match?.[2] || dataUrlBase64(dataUrl)));
+  return new Blob([bytes], { type: contentType });
+}
+
 function nowLocalText() {
   return new Date().toISOString().slice(0, 19).replace("T", " ");
 }
@@ -453,11 +501,16 @@ function nowLocalText() {
 function extractPgyUserId(row) {
   const direct = valueByAliases(row, "达人ID");
   const url = valueByAliases(row, "蒲公英链接") || row?.pgy_url || "";
-  const candidates = [direct, url, row?.creator_id, row?.userId, row?.bloggerId, row?.kolId];
-  for (const candidate of candidates) {
-    const text = cellText(candidate);
-    const match = text.match(/(?:blogger-detail\/|pgy-api:)?([A-Za-z0-9_-]{6,})/);
-    if (match) return match[1];
+  const urlText = cellText(url);
+  const urlMatch = urlText.match(/(?:blogger-detail\/|pgy-api:)([A-Za-z0-9_-]{6,})/);
+  if (urlMatch) return urlMatch[1];
+
+  const idCandidates = [direct, row?.creator_id, row?.userId, row?.bloggerId, row?.kolId];
+  for (const candidate of idCandidates) {
+    const text = cellText(candidate).trim();
+    if (!text || /^https?:\/\//i.test(text) || text.includes(".")) continue;
+    const directMatch = text.match(/^(?:pgy-api:)?([A-Za-z0-9_-]{6,})$/);
+    if (directMatch) return directMatch[1];
   }
   return "";
 }
@@ -572,6 +625,27 @@ async function feishuFetch(path, { token, method = "GET", body = null, params = 
   return payload.data || {};
 }
 
+async function feishuFormFetch(path, { token, form, params = null } = {}) {
+  const url = new URL(`${FEISHU_BASE}${path}`);
+  for (const [key, value] of Object.entries(params || {})) {
+    if (value !== undefined && value !== null && value !== "") url.searchParams.set(key, String(value));
+  }
+  const response = await fetch(url.toString(), {
+    method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: form
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok || payload.code !== 0) {
+    throw new FeishuApiError(feishuPayloadMessage(payload, `飞书接口失败：HTTP ${response.status}`), {
+      status: response.status,
+      payload,
+      url: url.toString()
+    });
+  }
+  return payload.data || {};
+}
+
 async function tenantToken(appId, appSecret) {
   if (tokenCache.appId === appId && tokenCache.token && Date.now() < tokenCache.expiresAt) return tokenCache.token;
   const response = await fetch(`${FEISHU_BASE}/auth/v3/tenant_access_token/internal`, {
@@ -613,6 +687,66 @@ async function listSheets(token, spreadsheetToken) {
   return data.sheets || [];
 }
 
+async function getFeishuDocumentTitle(token, docToken, docType) {
+  try {
+    const data = docType === "bitable"
+      ? await feishuFetch(`/bitable/v1/apps/${docToken}`, { token })
+      : await feishuFetch(`/sheets/v3/spreadsheets/${docToken}`, { token });
+    const meta = data.app || data.spreadsheet || data;
+    const title = meta.name || meta.title || "";
+    if (title) return title;
+  } catch {}
+  try {
+    const data = await feishuFetch("/drive/v1/metas/batch_query", {
+      token,
+      method: "POST",
+      body: { request_docs: [{ doc_token: docToken, doc_type: docType }] }
+    });
+    const meta = (data.metas || data.items || [])[0] || {};
+    return meta.title || meta.name || "";
+  } catch {
+    return "";
+  }
+}
+
+async function inspectFeishuTableConfig(options) {
+  const appId = String(options.feishuAppId || "").trim();
+  const appSecret = String(options.feishuAppSecret || "").trim();
+  const feishuUrl = String(options.feishuUrl || "").trim();
+  if (!appId || !appSecret || !feishuUrl) throw new Error("请先填写飞书 App ID、App Secret 和表格链接。");
+  const token = await tenantToken(appId, appSecret);
+  const initial = parseFeishuUrl(feishuUrl);
+  let wikiTitle = "";
+  if (initial.resourceType === "wiki") {
+    const data = await feishuFetch("/wiki/v2/spaces/get_node", { token, params: { token: initial.token } });
+    wikiTitle = data.node?.title || data.title || "";
+  }
+  const parsed = await resolveWikiTarget(initial, token);
+  if (parsed.resourceType === "bitable") {
+    const tables = await listBitableTables(token, parsed.token);
+    if (!tables.length) throw new Error("目标飞书多维表格没有可用子表。");
+    const tableName = wikiTitle || await getFeishuDocumentTitle(token, parsed.token, "bitable");
+    if (!tableName) throw new Error("已读取子表，但未获取到飞书表格原始名称，请确认应用具备云文档读取权限。");
+    return {
+      ok: true,
+      resourceType: "bitable",
+      tableName,
+      sheets: tables.map((table) => ({ sheetId: table.table_id || table.id, title: table.name || table.title || table.table_id || table.id }))
+    };
+  }
+  if (parsed.resourceType !== "sheet") throw new Error("当前仅支持飞书电子表格或多维表格。");
+  const sheets = await listSheets(token, parsed.token);
+  if (!sheets.length) throw new Error("目标飞书电子表格没有可用子表。");
+  const tableName = wikiTitle || await getFeishuDocumentTitle(token, parsed.token, "sheet");
+  if (!tableName) throw new Error("已读取子表，但未获取到飞书表格原始名称，请确认应用具备云文档读取权限。");
+  return {
+    ok: true,
+    resourceType: "sheet",
+    tableName,
+    sheets: sheets.map((sheet) => ({ sheetId: sheet.sheet_id || sheet.id, title: sheet.title || sheet.name || sheet.sheet_id || sheet.id }))
+  };
+}
+
 async function chooseSheet(token, spreadsheetToken, preferredSheetId) {
   const sheets = await listSheets(token, spreadsheetToken);
   if (preferredSheetId) {
@@ -635,6 +769,13 @@ async function readSheetValues(token, spreadsheetToken, sheetId, range = "A1:ZZ5
   return data.valueRange?.values || [];
 }
 
+async function readSheetRowValues(token, spreadsheetToken, sheetId, rowNumber, startColumnIndex, endColumnIndex) {
+  const startColumn = columnName(startColumnIndex + 1);
+  const endColumn = columnName(endColumnIndex + 1);
+  const values = await readSheetValues(token, spreadsheetToken, sheetId, `${startColumn}${rowNumber}:${endColumn}${rowNumber}`);
+  return values[0] || [];
+}
+
 async function readSheetValuesFlexible(token, spreadsheetToken, sheetId) {
   const ranges = ["A1:ZZ20000", "A1:ZZ5000", "A1:AZ1000", "A1:AZ500", "A1:AB500"];
   let lastError = null;
@@ -651,19 +792,27 @@ async function readSheetValuesFlexible(token, spreadsheetToken, sheetId) {
 }
 
 function exportFieldsForRows(rows) {
-  const sourceFields = Array.from(new Set(rows.flatMap((row) => Object.keys(normalizeExportRow(row)))));
-  return [...STANDARD_FIELDS, ...sourceFields.filter((field) => !STANDARD_FIELDS.includes(field) && field !== "raw_payload")];
+  return referenceExportFieldNames();
 }
 
 async function writeSheetHeader(token, spreadsheetToken, sheetId, rows) {
-  const fields = exportFieldsForRows(rows);
+  const fields = REFERENCE_EXPORT_COLUMNS;
   const endColumn = columnName(fields.length);
   await feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values`, {
     token,
     method: "PUT",
-    body: { valueRange: { range: `${sheetId}!A1:${endColumn}1`, values: [fields] } }
+    body: {
+      valueRange: {
+        range: `${sheetId}!A1:${endColumn}${REFERENCE_EXPORT_HEADER_ROWS.length}`,
+        values: referenceExportHeaderRows()
+      }
+    }
   });
-  return fields.map((fieldName, index) => ({ fieldName, columnIndex: index }));
+  return fields.map((field) => ({
+    fieldName: field.fieldName,
+    canonicalField: field.canonicalField,
+    columnIndex: field.columnIndex
+  }));
 }
 
 async function ensureSheetFields(token, spreadsheetToken, sheetId, rows, requiredFields = []) {
@@ -689,6 +838,65 @@ async function ensureSheetFields(token, spreadsheetToken, sheetId, rows, require
   return fields;
 }
 
+async function ensureMappedSheetShape(token, spreadsheetToken, sheetId, values, rows) {
+  const requiredFields = exportFieldsForRows(rows);
+  if (!effectiveSheetWidth(values)) {
+    await writeSheetHeader(token, spreadsheetToken, sheetId, rows);
+    return referenceExportShape();
+  }
+
+  let shape = detectSheetShape(values);
+  const existing = new Set();
+  for (const column of shape.columns) {
+    if (column.fieldName) existing.add(normalizeKey(column.fieldName));
+    if (column.canonicalField) existing.add(`canonical:${column.canonicalField}`);
+    column.writable = Boolean(column.canonicalField) || rows.some((row) => {
+      const value = rowValueForField(row, column.fieldName);
+      return value !== undefined && value !== null && value !== "";
+    });
+  }
+
+  const missingFields = requiredFields.filter((fieldName) => {
+    const canonicalField = canonicalFieldForHeader(fieldName) || fieldName;
+    if (existing.has(normalizeKey(fieldName))) return false;
+    if (existing.has(`canonical:${canonicalField}`)) return false;
+    return true;
+  });
+
+  if (missingFields.length) {
+    const startColumn = shape.columns.length + 1;
+    const endColumn = startColumn + missingFields.length - 1;
+    const headerWriteRow = shapeHeaderWriteRow(shape);
+    await feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values`, {
+      token,
+      method: "PUT",
+      body: {
+        valueRange: {
+          range: `${sheetId}!${columnName(startColumn)}${headerWriteRow}:${columnName(endColumn)}${headerWriteRow}`,
+          values: [missingFields]
+        }
+      }
+    });
+    const nextValues = values.map((line) => [...(line || [])]);
+    while (nextValues.length < headerWriteRow) nextValues.push([]);
+    const headerLine = nextValues[headerWriteRow - 1];
+    for (let index = 0; index < missingFields.length; index += 1) {
+      headerLine[startColumn - 1 + index] = missingFields[index];
+    }
+    shape = detectSheetShape(nextValues);
+  }
+
+  for (const column of shape.columns) {
+    if (column.writable !== undefined) continue;
+    column.writable = Boolean(column.canonicalField) || rows.some((row) => {
+      const value = rowValueForField(row, column.fieldName);
+      return value !== undefined && value !== null && value !== "";
+    });
+  }
+
+  return shape;
+}
+
 function rowValueForField(row, fieldName) {
   const normalized = normalizeExportRow(row);
   const exact = normalized[fieldName];
@@ -702,15 +910,51 @@ function rowValueForField(row, fieldName) {
   return "";
 }
 
+function rowValueForMappedColumn(row, column) {
+  const normalized = normalizeExportRow(row);
+  const referenceColumn = referenceColumnForFieldName(column?.fieldName || "");
+  if (referenceColumn) return valueForReferenceColumn(normalized, referenceColumn);
+  if (column?.canonicalField) {
+    const value = valueForCanonicalField(normalized, column.canonicalField);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return rowValueForField(normalized, column?.fieldName || "");
+}
+
+async function appendMappedSheetRows(token, spreadsheetToken, sheetId, shape, rows) {
+  const ordered = shape.columns.filter((column) => column.columnIndex >= 0 && column.writable !== false).sort((a, b) => a.columnIndex - b.columnIndex);
+  if (!ordered.length) throw new Error("目标飞书表格没有可写入的表头列。");
+  const start = Math.min(...ordered.map((field) => field.columnIndex)) + 1;
+  const end = Math.max(...ordered.map((field) => field.columnIndex)) + 1;
+  const values = rows.map((row) => {
+    const line = Array(end - start + 1).fill("");
+    for (const column of ordered) {
+      line[column.columnIndex + 1 - start] = normalizeSheetWriteValue(rowValueForMappedColumn(row, column), column.fieldName || column.canonicalField || "");
+    }
+    return line;
+  });
+  return feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values_append`, {
+    token,
+    method: "POST",
+    body: {
+      valueRange: {
+        range: `${sheetId}!${columnName(start)}${shape.dataStartRow}:${columnName(end)}${shape.dataStartRow + Math.max(0, rows.length - 1)}`,
+        values
+      }
+    }
+  });
+}
+
 async function writeSheetCells(token, spreadsheetToken, sheetId, fields, rowNumber, valuesByField) {
   const writes = Object.entries(valuesByField || {}).filter(([fieldName]) => fields.some((field) => field.fieldName === fieldName));
   for (const [fieldName, value] of writes) {
     const field = fields.find((item) => item.fieldName === fieldName);
     const column = columnName(field.columnIndex + 1);
+    const normalizedValue = normalizeSheetWriteValue(value, fieldName);
     await feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values`, {
       token,
       method: "PUT",
-      body: { valueRange: { range: `${sheetId}!${column}${rowNumber}:${column}${rowNumber}`, values: [[value ?? ""]] } }
+      body: { valueRange: { range: `${sheetId}!${column}${rowNumber}:${column}${rowNumber}`, values: [[normalizedValue]] } }
     });
   }
 }
@@ -732,16 +976,21 @@ async function writeSheetImage(token, spreadsheetToken, sheetId, fields, rowNumb
 
 async function writeSheetCellByColumn(token, spreadsheetToken, sheetId, columnIndexValue, rowNumber, value) {
   const column = columnName(columnIndexValue + 1);
+  const normalizedValue = normalizeSheetWriteValue(value);
   return feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values`, {
     token,
     method: "PUT",
-    body: { valueRange: { range: `${sheetId}!${column}${rowNumber}:${column}${rowNumber}`, values: [[value ?? ""]] } }
+    body: { valueRange: { range: `${sheetId}!${column}${rowNumber}:${column}${rowNumber}`, values: [[normalizedValue]] } }
   });
 }
 
 function normalizeSheetWriteValue(value, fieldName = "") {
   if (value === null || value === undefined) return "";
   if (typeof value === "number" || typeof value === "boolean") return value;
+  if (isTagListField(fieldName)) {
+    const tagText = compactTagText(value);
+    if (tagText) return tagText;
+  }
   let text = "";
   if (typeof value === "string") {
     text = value;
@@ -763,6 +1012,10 @@ function normalizeSheetWriteValue(value, fieldName = "") {
   return text;
 }
 
+function isTagListField(fieldName = "") {
+  return /账号类型|达人类型|达人标签|博主类目|博主标签|账号标签|内容类型|内容标签|博主人设/.test(String(fieldName || ""));
+}
+
 async function writeSheetCellByColumnBestEffort(token, spreadsheetToken, sheetId, columnIndexValue, rowNumber, value, fieldName = "") {
   const normalizedValue = normalizeSheetWriteValue(value, fieldName);
   try {
@@ -770,17 +1023,99 @@ async function writeSheetCellByColumnBestEffort(token, spreadsheetToken, sheetId
     return { ok: true };
   } catch (error) {
     const originalMessage = shortErrorMessage(error);
+    await sleep(SHEET_WRITE_RETRY_DELAY_MS);
+    try {
+      await writeSheetCellByColumn(token, spreadsheetToken, sheetId, columnIndexValue, rowNumber, normalizedValue);
+      return { ok: true, retried: true };
+    } catch (retrySameError) {
+      const retrySameMessage = shortErrorMessage(retrySameError);
     const fallbackValue = cellText(value) || jsonText(value);
     if (fallbackValue && fallbackValue !== normalizedValue) {
       try {
         await writeSheetCellByColumn(token, spreadsheetToken, sheetId, columnIndexValue, rowNumber, fallbackValue);
         return { ok: true, retried: true };
       } catch (retryError) {
-        return { ok: false, message: `${fieldName || `第${columnIndexValue + 1}列`}未写入：${originalMessage}；重试失败：${shortErrorMessage(retryError)}` };
+          return { ok: false, message: `${fieldName || `第${columnIndexValue + 1}列`}未写入：${originalMessage}；重试失败：${retrySameMessage}；降级重试失败：${shortErrorMessage(retryError)}` };
       }
     }
-    return { ok: false, message: `${fieldName || `第${columnIndexValue + 1}列`}未写入：${shortErrorMessage(error)}` };
+      return { ok: false, message: `${fieldName || `第${columnIndexValue + 1}列`}未写入：${originalMessage}；重试失败：${retrySameMessage}` };
+    }
   }
+}
+
+async function verifySheetTextWrites(token, spreadsheetToken, sheetId, rowNumber, writes) {
+  if (!writes.length) return { confirmedCount: 0, failures: [] };
+  const minColumn = Math.min(...writes.map((write) => write.column.columnIndex));
+  const maxColumn = Math.max(...writes.map((write) => write.column.columnIndex));
+  const failuresByColumn = new Map();
+  let pending = writes.slice();
+  let confirmedKeys = new Set();
+
+  for (let attempt = 0; attempt <= SHEET_WRITE_VERIFY_RETRIES; attempt += 1) {
+    await sleep(SHEET_WRITE_VERIFY_DELAY_MS);
+    let rowValues = [];
+    try {
+      rowValues = await readSheetRowValues(token, spreadsheetToken, sheetId, rowNumber, minColumn, maxColumn);
+    } catch (error) {
+      if (attempt >= SHEET_WRITE_VERIFY_RETRIES) {
+        for (const write of pending) {
+          failuresByColumn.set(write.column.columnIndex, {
+            column: write.column,
+            value: write.value,
+            message: `写后读回失败：${shortErrorMessage(error)}`
+          });
+        }
+      }
+      continue;
+    }
+
+    pending = pending.filter((write) => {
+      const actual = rowValues[write.column.columnIndex - minColumn];
+      const present = nonEmptyCell(actual);
+      if (present) {
+        confirmedKeys.add(String(write.column.columnIndex));
+        failuresByColumn.delete(write.column.columnIndex);
+      }
+      return !present;
+    });
+    if (!pending.length) break;
+
+    if (attempt < SHEET_WRITE_VERIFY_RETRIES) {
+      for (const write of pending) {
+        const retryResult = await writeSheetCellByColumnBestEffort(
+          token,
+          spreadsheetToken,
+          sheetId,
+          write.column.columnIndex,
+          rowNumber,
+          write.value,
+          write.column.fieldName || write.column.canonicalField
+        );
+        if (!retryResult.ok) {
+          failuresByColumn.set(write.column.columnIndex, {
+            column: write.column,
+            value: write.value,
+            message: `读回为空，补写失败：${retryResult.message}`
+          });
+        }
+      }
+    }
+  }
+
+  for (const write of pending) {
+    if (!confirmedKeys.has(String(write.column.columnIndex)) && !failuresByColumn.has(write.column.columnIndex)) {
+      failuresByColumn.set(write.column.columnIndex, {
+        column: write.column,
+        value: write.value,
+        message: "飞书写入接口返回成功，但读回仍为空，已尝试补写"
+      });
+    }
+  }
+
+  return {
+    confirmedCount: writes.length - failuresByColumn.size,
+    failures: Array.from(failuresByColumn.values())
+  };
 }
 
 async function writeSheetImageByColumn(token, spreadsheetToken, sheetId, columnIndexValue, rowNumber, dataUrl, name) {
@@ -849,7 +1184,10 @@ function cellLooksLikeImage(value) {
 }
 
 function nonEmptyDataRowCount(values) {
-  return (values || []).slice(1).filter((row) => (row || []).some(nonEmptyCell)).length;
+  if (!Array.isArray(values) || !values.length) return 0;
+  const shape = detectSheetShape(values);
+  const startIndex = Math.max(0, (shape.dataStartRow || 2) - 1);
+  return values.slice(startIndex).filter((row) => (row || []).some(nonEmptyCell)).length;
 }
 
 function effectiveSheetWidth(values) {
@@ -862,34 +1200,318 @@ function effectiveSheetWidth(values) {
   return width;
 }
 
-function canonicalFieldForHeader(header) {
-  const normalized = normalizeKey(header);
-  if (!normalized) return "";
-  for (const fieldName of [...STANDARD_FIELDS, ...DETAIL_FIELDS]) {
-    if (normalizeKey(fieldName) === normalized) return fieldName;
-  }
-  for (const [fieldName, aliases] of Object.entries(FIELD_ALIASES)) {
-    for (const alias of aliases || []) {
-      const aliasKey = normalizeKey(alias);
-      if (!aliasKey) continue;
-      if (aliasKey === normalized || normalized.includes(aliasKey)) return fieldName;
+function headerCellText(values, rowIndex, columnIndex) {
+  const value = values[rowIndex]?.[columnIndex];
+  if (nonEmptyCell(value)) return cellText(value).trim();
+  for (let left = columnIndex - 1; left >= 0; left -= 1) {
+    const leftValue = values[rowIndex]?.[left];
+    if (nonEmptyCell(leftValue)) {
+      const text = cellText(leftValue).trim();
+      if (/(日常|合作|商单|商业|图文|视频|粉丝|报价|价格|达人|账号|小红书|蒲公英|笔记|画像|效果|基础信息|账号信息|达人信息|数据)/i.test(text)) return text;
+      return "";
     }
   }
   return "";
 }
 
-function buildSheetShape(values, headerRows = 1) {
+function uniqueHeaderParts(parts) {
+  const seen = new Set();
+  const output = [];
+  for (const part of parts) {
+    const text = cellText(part).trim();
+    if (!text) continue;
+    const key = normalizeKey(text);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    output.push(text);
+  }
+  return output;
+}
+
+function referenceExportHeaderRows() {
+  return REFERENCE_EXPORT_HEADER_ROWS.map((row) => row.slice());
+}
+
+function buildReferenceExportColumns() {
+  return REFERENCE_EXPORT_HEADER_ROWS[2].map((leafHeader, index) => {
+    const parts = [];
+    for (let rowIndex = 0; rowIndex < REFERENCE_EXPORT_HEADER_ROWS.length; rowIndex += 1) {
+      const text = headerCellText(REFERENCE_EXPORT_HEADER_ROWS, rowIndex, index);
+      if (text) parts.push(text);
+    }
+    const uniqueParts = uniqueHeaderParts(parts);
+    const fieldName = uniqueParts.join(" / ") || `Col${index + 1}`;
+    const contextHeader = uniqueParts.slice(0, -1).join(" / ");
+    return {
+      fieldName,
+      leafHeader: leafHeader || uniqueParts[uniqueParts.length - 1] || fieldName,
+      contextHeader,
+      canonicalField: canonicalFieldForHeader(leafHeader, contextHeader) || canonicalFieldForHeader(fieldName),
+      columnIndex: index
+    };
+  });
+}
+
+const REFERENCE_EXPORT_COLUMNS = buildReferenceExportColumns();
+const REFERENCE_EXPORT_FIELD_MAP = new Map();
+for (const column of REFERENCE_EXPORT_COLUMNS) {
+  REFERENCE_EXPORT_FIELD_MAP.set(normalizeKey(column.fieldName), column);
+  if (!REFERENCE_EXPORT_FIELD_MAP.has(normalizeKey(column.leafHeader))) {
+    REFERENCE_EXPORT_FIELD_MAP.set(normalizeKey(column.leafHeader), column);
+  }
+}
+
+function referenceExportFieldNames() {
+  return REFERENCE_EXPORT_COLUMNS.map((column) => column.fieldName);
+}
+
+function referenceColumnForFieldName(fieldName) {
+  return REFERENCE_EXPORT_FIELD_MAP.get(normalizeKey(fieldName)) || null;
+}
+
+function referenceExportShape() {
+  return {
+    headerRows: REFERENCE_EXPORT_HEADER_ROWS.length,
+    headerStartRow: 1,
+    dataStartRow: REFERENCE_EXPORT_HEADER_ROWS.length + 1,
+    columns: REFERENCE_EXPORT_COLUMNS.map((column) => ({
+      fieldName: column.fieldName,
+      canonicalField: column.canonicalField,
+      columnIndex: column.columnIndex,
+      writable: true
+    })),
+    mappedCount: REFERENCE_EXPORT_COLUMNS.filter((column) => column.canonicalField).length
+  };
+}
+
+function headerShapeScore(shape, values) {
+  const mapped = shape.columns.filter((column) => column.canonicalField).length;
+  const width = Math.max(1, shape.columns.length);
+  const identityFields = new Set(["达人ID", "达人昵称", "达人名称", "蒲公英链接", "主页链接", "小红书号"]);
+  const identityMapped = shape.columns.filter((column) => identityFields.has(column.canonicalField)).length;
+  const mappedFields = shape.columns.map((column) => column.canonicalField).filter(Boolean);
+  const duplicatePenalty = mappedFields.length - new Set(mappedFields).size;
+  const dataRows = (values || []).slice(shape.dataStartRow - 1, shape.dataStartRow + 9);
+  const dataDensity = dataRows.reduce((count, row) => count + (row || []).filter(nonEmptyCell).length, 0);
+  return mapped * 12 + identityMapped * 8 + Math.min(width, 80) + Math.min(dataDensity, 120) / 10 - duplicatePenalty * 2 - (shape.headerRows - 1) * 1.5;
+}
+
+function shapeHeaderWriteRow(shape) {
+  return (shape?.headerStartRow || 1) + (shape?.headerRows || 1) - 1;
+}
+
+function canonicalAgeRatioFieldForHeader(header, context = "") {
+  const raw = `${cellText(context)}${cellText(header)}`
+    .normalize("NFKC")
+    .replace(/[‐‑‒–—－]/g, "-")
+    .replace(/[～]/g, "~")
+    .replace(/\s+/g, "");
+  const key = normalizeKey(raw);
+  if (!raw && !key) return "";
+  const hasRatioContext = /(粉丝|fans|follower|年龄|age|人群|画像|分布)/i.test(raw)
+    && /(占比|比例|百分比|ratio|percent|%|分布|段)/i.test(raw);
+  if (!hasRatioContext) return "";
+  if (/(<18|小于18|未满18|18岁以下|0[-~至到]?17)/i.test(raw)) return "<18粉丝占比";
+  if (/(18[-~至到]?24|18_?24|18岁?至24|18到24)/i.test(raw)) return "18-24粉丝占比";
+  if (/(25[-~至到]?34|25_?34|25岁?至34|25到34)/i.test(raw)) return "25-34粉丝占比";
+  if (/(35[-~至到]?44|35_?44|35岁?至44|35到44)/i.test(raw)) return "35-44粉丝占比";
+  if (/(>44|44\+|44岁?(以上|及以上)|大于44|45岁?(以上|及以上))/i.test(raw)) return "44岁以上粉丝占比";
+  if (/(>35|35\+|35岁?(以上|及以上)|大于35)/i.test(raw)) return "35岁以上粉丝占比";
+  return "";
+}
+
+function semanticCanonicalFieldForHeader(header, context = "") {
+  const headerText = cellText(header);
+  const contextText = cellText(context);
+  const raw = `${contextText}${headerText}`.normalize("NFKC").replace(/\s+/g, "");
+  const leaf = headerText.normalize("NFKC").replace(/\s+/g, "");
+  const key = normalizeKey(`${contextText}${headerText}`);
+  const has = (pattern) => pattern.test(raw) || pattern.test(key);
+  const leafHas = (pattern) => pattern.test(leaf) || pattern.test(normalizeKey(leaf));
+  const isCoop = has(/合作|商单|商业|报备|蒲公英|近30天|30天|30d|case/i);
+  const isDaily = has(/日常|自然|非合作|普通|常规|历史|平均/i) && !isCoop;
+  const isVideo = has(/视频|video/i);
+  const isImage = has(/图文|图片|笔记|image|picture/i) && !isVideo;
+  const unsafeName = has(/清单|客户|反馈|进度|状态|阶段|备注|排期|沟通|需求|档期/);
+
+  if (has(/蒲公英|pgy|pugongying/) && has(/主页|链接|link|url|详情/)) return "蒲公英链接";
+  if (has(/小红书|红书|xhs|red/) && has(/主页|链接|link|url|profile/)) return "主页链接";
+  if (has(/小红书号|红书号|小红书id|red_?id|xhs_?id|redbook_?id|red_book_id|xiaohongshu_?id/i)) return "小红书号";
+  if (!unsafeName && has(/达人|博主|kol|账号|creator|blogger/i) && has(/昵称|名称|名字|name|nick/i)) return "达人昵称";
+  if (has(/达人|博主|kol|账号|creator|blogger/i) && has(/\bid\b|编号|userid|bloggerid|creatorid|kolid/i)) return "达人ID";
+
+  if (has(/粉丝|fans|follower/i) && has(/变化|幅度|增长|涨粉|增幅|growth/i)) return "粉丝增长率";
+  if (has(/粉丝|fans|follower/i) && has(/画像|portrait/) && has(/截图|图片|image|screenshot/i)) return "粉丝画像截图";
+  if (has(/笔记|数据|概览|overview/) && has(/截图|图片|image|screenshot/i)) return "笔记数据截图";
+  if (has(/粉丝|fans|follower/i) && has(/画像|portrait|文本|文案|摘要|text/i)) return "粉丝画像文本";
+  if (has(/笔记|数据|概览|overview/) && has(/文本|文案|摘要|text/i)) return "笔记数据文本";
+  const ageRatioField = canonicalAgeRatioFieldForHeader(header, context);
+  if (ageRatioField) return ageRatioField;
+  if (has(/女性|女粉|女/) && has(/粉丝|fans|占比|比例|ratio/i)) return "女性粉丝占比";
+  if (has(/男性|男粉|男/) && has(/粉丝|fans|占比|比例|ratio/i)) return "男性粉丝占比";
+  if (has(/18[-~至到]?24岁?|18_?24/i) && has(/粉丝|fans|占比|比例|ratio/i)) return "18-24粉丝占比";
+  if (has(/25[-~至到]?34岁?|25_?34/i) && has(/粉丝|fans|占比|比例|ratio/i)) return "25-34粉丝占比";
+  if (has(/35[-~至到]?44岁?|35_?44/i) && has(/粉丝|fans|占比|比例|ratio/i)) return "35-44粉丝占比";
+  if (has(/44岁?(以上|\+)|44plus|44_plus/i) && has(/粉丝|fans|占比|比例|ratio/i)) return "44岁以上粉丝占比";
+  if (has(/35岁?(以上|\+)|35plus|35_plus/i) && has(/粉丝|fans|占比|比例|ratio/i)) return "35岁以上粉丝占比";
+  if (has(/活跃|active/) && has(/粉丝|fans|占比|比例|ratio/i)) return "活跃粉丝占比";
+  if (has(/阅读|read/) && has(/粉丝|fans|占比|比例|ratio/i)) return "阅读粉丝占比";
+  if (has(/互动|engage|interaction/) && has(/粉丝|fans|占比|比例|ratio/i)) return "互动粉丝占比";
+  if (has(/下单|订单|order/) && has(/粉丝|fans|占比|比例|ratio/i)) return "下单粉丝占比";
+  if (has(/性别|gender/) && has(/分布|distribution/i)) return "粉丝性别分布";
+  if (has(/年龄|age/) && has(/分布|distribution/i)) return "粉丝年龄分布";
+  if (has(/地域|地区|城市|region|area/) && has(/分布|distribution/i)) return "粉丝地域分布";
+  if (has(/设备|device/) && has(/分布|distribution/i)) return "用户设备分布";
+  if (has(/兴趣|话题|内容偏好|topic|interest/i)) return "用户兴趣";
+  if (has(/近?7天|7d/i) && has(/活跃|active/)) return "近7天活跃天数";
+  if (has(/粉丝|fans|follower/i) && !has(/画像|占比|比例|增长|变化|幅度|维度|趋势|分布|活跃|阅读|互动|下单|性别|年龄|地域|设备|兴趣|growth|ratio|distribution/i)) {
+    if (has(/w|万|量级/)) return "粉丝数w";
+    return "粉丝数";
+  }
+
+  if (has(/赞藏|获赞|收藏|点赞|like|collect/i)) return "获赞与收藏";
+  if (has(/报价|价格|刊例|裸价|一口价|quote|price/i)) {
+    if (isVideo) return "视频报价";
+    if (isImage) return "图文报价";
+    return "平台报价";
+  }
+  if (has(/完播|播放完成|completion|fullview/i)) return "完播率";
+  if (has(/图文|图片|picture|image/i) && has(/3秒|3s|three.?second/i) && has(/阅读|read|view/i)) return "图文3秒阅读率";
+  if (leafHas(/cpm/i)) return "CPM";
+  if (leafHas(/cpr|阅读单价|阅读成本|readcost/i)) {
+    if (isVideo) return "视频预估阅读单价";
+    if (isImage) return "图文预估阅读单价";
+  }
+  if (leafHas(/cpe|互动单价|互动成本|engagecost|interactioncost/i)) {
+    if (isVideo) return "视频预估互动单价";
+    if (isImage) return "图文预估互动单价";
+    return "CPE";
+  }
+
+  if (has(/曝光|展现|imp|impression|exposure/i)) return isCoop ? "曝光中位数（合作）" : "曝光中位数（日常）";
+  if (has(/阅读|播放|read|view/i)) return isCoop ? "阅读中位数（合作）" : "阅读中位数（日常）";
+  if (has(/互动|engage|interaction/i)) return isCoop ? "互动中位数（合作）" : "互动中位数（日常）";
+  if (has(/合作|商单|订单|order/i) && has(/数|量|count|cnt/i)) return "合作订单数";
+  if (has(/合作|商单|商业/) && has(/笔记|note/) && has(/数|量|count|cnt/i)) return "已合作笔记数";
+  if (has(/回复率|48h|48小时|response|reply/i)) return "邀约48h回复率";
+  if (has(/账号|达人|博主|内容/) && has(/类型|类目|分类|category|type/i)) return "账号类型";
+  if (has(/ip|城市|地区|地域|city|location/i) && !has(/分布|distribution/i)) return "IP城市";
+
+  if (has(/补采|详情/) && has(/状态|进度|status/i)) return "详情补采状态";
+  if (has(/补采|详情|采集/) && has(/时间|日期|time|date/i)) return "详情补采时间";
+  if (has(/完整度|完整性|completeness/i)) return "详情完整度";
+  if (has(/api|接口/) && has(/摘要|捕获|capture|summary/i)) return "详情API捕获摘要";
+  if (has(/简介|介绍|签名|bio|intro/i)) return "个人简介";
+  if (has(/优势|亮点|卖点|advantage/i)) return "博主优势";
+  if (has(/近期|最近|recent/) && has(/笔记|note/) && has(/json|原始|raw/i)) return "近期笔记JSON";
+  if (has(/详情|detail/) && has(/json|原始|raw/i)) return "详情原始JSON";
+  if (has(/蒲公英|pgy/) && has(/json|原始|raw/i)) return "蒲公英原始JSON";
+  if (has(/备注|note|remark/i) && has(/补采|详情/)) return "详情补采备注";
+
+  if (has(/笔记|note/) && has(/类型|形式|type/i)) return "笔记类型";
+  if (has(/来源|source/i)) return "数据来源";
+  if (has(/采集|抓取|导出|同步/) && has(/时间|日期|time|date/i)) return "采集时间";
+  return "";
+}
+
+function canonicalFieldForHeader(header, context = "") {
+  const normalized = normalizeKey(header);
+  if (!normalized) return "";
+  const headerText = cellText(header);
+  const contextText = cellText(context);
+  for (const fieldName of [...STANDARD_FIELDS, ...DETAIL_FIELDS]) {
+    if (normalizeKey(fieldName) === normalized) return fieldName;
+  }
+  const semanticField = semanticCanonicalFieldForHeader(header, context);
+  if (semanticField) return semanticField;
+  const raw = `${contextText}${headerText}`.replace(/\s+/g, "");
+  const key = normalized;
+  const unsafeNicknameHeader = /(清单|客户|反馈|进度|状态|阶段|备注|排期|沟通|需求|档期)/i.test(raw);
+  const unsafeFansHeader = /(画像|占比|比例|增长|变化|维度|趋势|分布|活跃|阅读|互动|下单|性别|年龄|地域|设备|兴趣)/i.test(raw);
+  const ageRatioField = canonicalAgeRatioFieldForHeader(header, context);
+  if (ageRatioField) return ageRatioField;
+  if (contextText && /(合作|商单|商业|报备|近30天|30天|30d)/i.test(raw) && /曝光/i.test(raw)) return "曝光中位数（合作）";
+  if (contextText && /(合作|商单|商业|图文3s|图文3秒|报备|近30天|30天|30d)/i.test(raw) && /(阅读|播放|read|cpr)/i.test(raw)) return "阅读中位数（合作）";
+  if (contextText && /(合作|商单|商业|报备|近30天|30天|30d)/i.test(raw) && /(互动|engage|interaction)/i.test(raw)) return "互动中位数（合作）";
+  if (contextText && /(日常|自然|非合作|普通|常规)/i.test(raw) && /曝光/i.test(raw)) return "曝光中位数（日常）";
+  if (contextText && /(日常|自然|非合作|普通|常规)/i.test(raw) && /(阅读|播放|read)/i.test(raw)) return "阅读中位数（日常）";
+  if (contextText && /(日常|自然|非合作|普通|常规)/i.test(raw) && /(互动|engage|interaction)/i.test(raw)) return "互动中位数（日常）";
+  const exactOnlyAliases = new Set([
+    "达人",
+    "kol",
+    "昵称",
+    "name",
+    "报价",
+    "价格",
+    "粉丝数",
+    "粉丝量",
+    "阅读量",
+    "互动",
+    "城市",
+    "地域",
+    "source"
+  ].map(normalizeKey));
+  for (const [fieldName, aliases] of Object.entries(FIELD_ALIASES)) {
+    for (const alias of aliases || []) {
+      const aliasKey = normalizeKey(alias);
+      if (!aliasKey) continue;
+      if (aliasKey === normalized) return fieldName;
+    }
+  }
+  if (/(蒲公英|pgy|pugongying)/i.test(raw) && /(主页|链接|link|url)/i.test(raw)) return "蒲公英链接";
+  if (/(小红书|红书|xhs)/i.test(raw) && /(主页|链接|link|url)/i.test(raw)) return "主页链接";
+  if (/(小红书号|红书号|小红书id|red_?id|xhs_?id|redbook_?id|red_book_id|xiaohongshu_?id)/i.test(raw)) return "小红书号";
+  if (!unsafeNicknameHeader && /(达人名|达人名称|达人昵称|博主名|博主名称|博主昵称|账号名|账号名称|昵称)/i.test(raw)) return "达人昵称";
+  if (/(账号类型|达人类型|达人标签|博主类目|博主标签|账号标签|账号类目|内容类型|内容标签|内容类目|类目分类|账号分类)/i.test(raw)) return "账号类型";
+  if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw) && /(w|万|量级)/i.test(raw)) return "粉丝数w";
+  if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw)) return "粉丝数";
+  if (/(图文|图片|笔记)/i.test(raw) && /(报价|价格|裸价|报备|刊例|一口价)/i.test(raw)) return "图文报价";
+  if (/视频/i.test(raw) && /(报价|价格|裸价|报备|刊例|一口价)/i.test(raw)) return "视频报价";
+  if (/(图文|图片|picture|image)/i.test(raw) && /(3秒|3s|three.?second)/i.test(raw) && /(阅读|read|view)/i.test(raw)) return "图文3秒阅读率";
+  if (/(视频|video)/i.test(raw) && /(完播|播放完成|fullview|completion|finish)/i.test(raw)) return "完播率";
+  if (/(合作|商单|商业|报备|近30天|30天|30d)/i.test(raw) && /曝光/i.test(raw) && /(中位|median|30天|30d|近30天|合作|商单|商业|报备)/i.test(raw)) return "曝光中位数（合作）";
+  if (/(合作|商单|商业|报备|近30天|30天|30d)/i.test(raw) && /(阅读|播放|read|cpr)/i.test(raw) && /(中位|median|30天|30d|近30天|合作|商单|商业|报备)/i.test(raw)) return "阅读中位数（合作）";
+  if (/(合作|商单|商业|报备|近30天|30天|30d)/i.test(raw) && /(互动|engage|interaction)/i.test(raw) && /(中位|median|30天|30d|近30天|合作|商单|商业|报备)/i.test(raw)) return "互动中位数（合作）";
+  if (/(日常|自然|非合作|普通|常规)/i.test(raw) && /曝光/i.test(raw)) return "曝光中位数（日常）";
+  if (/(日常|自然|非合作|普通|常规)/i.test(raw) && /(阅读|播放|read)/i.test(raw)) return "阅读中位数（日常）";
+  if (/(日常|自然|非合作|普通|常规)/i.test(raw) && /(互动|engage|interaction)/i.test(raw)) return "互动中位数（日常）";
+  if (/(女|女性)/i.test(raw) && /粉丝占比/i.test(raw)) return "女性粉丝占比";
+  if (/(男|男性)/i.test(raw) && /粉丝占比/i.test(raw)) return "男性粉丝占比";
+  if (/完播/i.test(raw)) return "完播率";
+  if (/cpr/i.test(key) && /(图文|图片|笔记)/i.test(raw)) return "图文预估阅读单价";
+  if (/cpe/i.test(key) && /(图文|图片|笔记)/i.test(raw)) return "图文预估互动单价";
+  if (/cpr/i.test(key) && /视频/i.test(raw)) return "视频预估阅读单价";
+  if (/cpe/i.test(key) && /视频/i.test(raw)) return "视频预估互动单价";
+  if (/cpm/i.test(key)) return "CPM";
+  if (/cpe/i.test(key)) return "CPE";
+  for (const [fieldName, aliases] of Object.entries(FIELD_ALIASES)) {
+    for (const alias of aliases || []) {
+      const aliasKey = normalizeKey(alias);
+      if (!aliasKey) continue;
+      if (unsafeNicknameHeader && (fieldName === "达人昵称" || fieldName === "达人名称")) continue;
+      if (unsafeFansHeader && (fieldName === "粉丝数" || fieldName === "粉丝数w")) continue;
+      if (exactOnlyAliases.has(aliasKey)) continue;
+      if (aliasKey.length >= 4 && normalized.includes(aliasKey)) return fieldName;
+    }
+  }
+  return "";
+}
+
+function buildSheetShape(values, headerRows = 1, startRow = 0) {
   const width = effectiveSheetWidth(values);
   const columns = [];
   let mappedCount = 0;
   for (let index = 0; index < width; index += 1) {
     const parts = [];
-    for (let rowIndex = 0; rowIndex < headerRows; rowIndex += 1) {
-      const value = values[rowIndex]?.[index];
-      if (nonEmptyCell(value)) parts.push(cellText(value).trim());
+    for (let rowIndex = startRow; rowIndex < startRow + headerRows; rowIndex += 1) {
+      const text = headerCellText(values, rowIndex, index);
+      if (text) parts.push(text);
     }
-    const header = parts.join(" / ") || `Col${index + 1}`;
-    const canonicalField = canonicalFieldForHeader(header);
+    const uniqueParts = uniqueHeaderParts(parts);
+    const header = uniqueParts.join(" / ") || `Col${index + 1}`;
+    const leafHeader = uniqueParts[uniqueParts.length - 1] || header;
+    const contextHeader = uniqueParts.slice(0, -1).join(" / ");
+    const canonicalField = canonicalFieldForHeader(leafHeader, contextHeader) || canonicalFieldForHeader(header);
     if (canonicalField) mappedCount += 1;
     columns.push({
       fieldName: header,
@@ -897,22 +1519,26 @@ function buildSheetShape(values, headerRows = 1) {
       columnIndex: index
     });
   }
-  return { headerRows, dataStartRow: headerRows + 1, columns, mappedCount };
+  return { headerRows, headerStartRow: startRow + 1, dataStartRow: startRow + headerRows + 1, columns, mappedCount };
 }
 
 function detectSheetShape(values) {
-  const oneRow = buildSheetShape(values, 1);
-  const twoRows = values.length > 1 ? buildSheetShape(values, 2) : oneRow;
-  const firstRowNonEmpty = (values[0] || []).filter(nonEmptyCell).length;
-  const secondRowNonEmpty = (values[1] || []).filter(nonEmptyCell).length;
-  if (
-    values.length > 1 &&
-    twoRows.mappedCount > oneRow.mappedCount &&
-    (oneRow.mappedCount < 2 || firstRowNonEmpty < secondRowNonEmpty)
-  ) {
-    return twoRows;
+  const maxStartRow = Math.min(5, Math.max(0, (values || []).length - 1));
+  const maxHeaderRows = Math.min(4, Math.max(1, (values || []).length));
+  let best = buildSheetShape(values, 1, 0);
+  let bestScore = headerShapeScore(best, values);
+  for (let startRow = 0; startRow <= maxStartRow; startRow += 1) {
+    for (let headerRows = 1; headerRows <= maxHeaderRows; headerRows += 1) {
+      if (startRow + headerRows > (values || []).length) continue;
+      const shape = buildSheetShape(values, headerRows, startRow);
+      const score = headerShapeScore(shape, values);
+      if (score > bestScore) {
+        best = shape;
+        bestScore = score;
+      }
+    }
   }
-  return oneRow;
+  return best;
 }
 
 function rowObjectFromShape(line, columns) {
@@ -927,7 +1553,8 @@ function rowObjectFromShape(line, columns) {
 }
 
 function sheetRowsToShapeObjects(values, shape) {
-  return values.slice(shape.headerRows).map((line, index) => ({
+  const startIndex = Math.max(0, (shape.dataStartRow || shape.headerRows + 1) - 1);
+  return values.slice(startIndex).map((line, index) => ({
     rowNumber: shape.dataStartRow + index,
     row: rowObjectFromShape(line, shape.columns),
     line
@@ -944,6 +1571,44 @@ function firstValidCreatorItem(items) {
 function columnUsesImageTemplate(column, templateItem) {
   if (!column || !templateItem) return false;
   return cellLooksLikeImage(templateItem.line?.[column.columnIndex]);
+}
+
+function rawHeaderCellForColumn(values, shape, column) {
+  const headerRowIndex = Math.max(0, shapeHeaderWriteRow(shape) - 1);
+  return cellText(values?.[headerRowIndex]?.[column?.columnIndex]).trim();
+}
+
+function columnLooksAutoAppendedReferenceHeader(values, shape, column) {
+  const rawHeader = rawHeaderCellForColumn(values, shape, column);
+  return rawHeader.includes(" / ") && Boolean(referenceColumnForFieldName(rawHeader));
+}
+
+function existingOnlySheetShape(values) {
+  const shape = detectSheetShape(values);
+  return {
+    ...shape,
+    columns: shape.columns
+      .filter((column) => !columnLooksAutoAppendedReferenceHeader(values, shape, column))
+      .map((column) => ({ ...column, writable: Boolean(column.canonicalField) }))
+  };
+}
+
+function columnHeaderText(column) {
+  return `${column?.fieldName || ""} ${column?.leafHeader || ""} ${column?.contextHeader || ""}`;
+}
+
+function isFansImageColumn(column) {
+  if (column?.canonicalField === "粉丝画像截图") return true;
+  const text = columnHeaderText(column);
+  if (!/(粉丝画像|粉丝分析|粉丝人群|人群画像)/.test(text)) return false;
+  return !/(文本|文字|摘要|JSON|原始|状态|时间|备注|占比|比例|分布|兴趣|地域|城市|设备|年龄|性别)/i.test(text);
+}
+
+function isNoteImageColumn(column) {
+  if (column?.canonicalField === "笔记数据截图") return true;
+  const text = columnHeaderText(column);
+  if (!/(商单案例|笔记数据|数据概览)/.test(text)) return false;
+  return !/(文本|文字|摘要|JSON|原始|状态|时间|备注|阅读量|曝光|互动|点赞|收藏|评论|分享|中位|CPM|CPE|CPR)/i.test(text);
 }
 
 function readMetricValue(valuesByField) {
@@ -985,14 +1650,16 @@ function computedValueForCanonicalField(valuesByField, canonicalField) {
 function canonicalBackfillValues(sourceRow, payload) {
   const captures = payload.captures || {};
   const userId = extractPgyUserId(sourceRow);
+  const sourceRaw = sourceRow?.raw_payload && typeof sourceRow.raw_payload === "object" ? sourceRow.raw_payload : {};
+  const detailRaw = payload.detail?.raw_payload && typeof payload.detail.raw_payload === "object" ? payload.detail.raw_payload : {};
   const detailRow = {
     ...(payload.detail || {}),
-    raw_payload: payload.detail?.raw_payload || {},
+    raw_payload: { ...sourceRaw, ...detailRaw },
     pgy_url: payload.detailUrl || detailUrlFromRow(sourceRow),
     profile_url: profileUrl(userId)
   };
   const normalizedDetail = normalizeExportRow({ ...sourceRow, ...detailRow });
-  const detailValues = detailValuesForSheet(payload.detail, captures, captures.audience?.found ? "已补足" : "已补足-未确认粉丝画像", payload.detailUrl || "");
+  const detailValues = detailValuesForSheet(payload.detail, captures, detailStatusByCapture(captures), payload.detailUrl || "");
   return { ...normalizedDetail, ...detailValues };
 }
 
@@ -1006,6 +1673,322 @@ function valueForCanonicalField(valuesByField, canonicalField) {
     if (valuesByField[alias] !== undefined && valuesByField[alias] !== null && valuesByField[alias] !== "") return valuesByField[alias];
   }
   return computedValueForCanonicalField(valuesByField, canonicalField);
+}
+
+function exactReferenceValue(row, column) {
+  const candidates = [column.fieldName, column.leafHeader].filter(Boolean);
+  for (const key of candidates) {
+    if (row[key] !== undefined && row[key] !== null && row[key] !== "") return row[key];
+  }
+  return "";
+}
+
+function rawPayload(row) {
+  return row?.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : row;
+}
+
+function rawValueByKeys(row, keys) {
+  return nestedValue(rawPayload(row), keys);
+}
+
+function cleanPgyUserId(value) {
+  return String(value || "").replace(/^pgy-api:/i, "").trim();
+}
+
+function roundedNumber(value, digits = 2) {
+  const number = numericValue(value);
+  if (typeof number !== "number" || !Number.isFinite(number)) return value === undefined || value === null ? "" : value;
+  const factor = 10 ** digits;
+  return Math.round(number * factor) / factor;
+}
+
+function valueInWan(value, digits = 2) {
+  const number = numericValue(value);
+  if (typeof number !== "number" || !Number.isFinite(number)) return value === undefined || value === null ? "" : value;
+  const wan = Math.abs(number) >= 1000 ? number / 10000 : number;
+  return roundedNumber(wan, digits);
+}
+
+function priceWithServiceFee(value) {
+  const price = numericValue(value);
+  if (typeof price !== "number" || !Number.isFinite(price)) return "";
+  return roundedNumber(price * 1.1, 2);
+}
+
+function stateText(value, fallbackPrice = "") {
+  if (value !== undefined && value !== null && value !== "") {
+    const text = String(value).trim();
+    if (/可接|可投|上架|开启|正常|true/i.test(text)) return "可接单";
+    if (/不可|不接|关闭|下架|false/i.test(text)) return "不可接单";
+    const number = Number(text);
+    if (Number.isFinite(number)) return number === 1 ? "可接单" : "不可接单";
+    return text;
+  }
+  return numericValue(fallbackPrice) ? "可接单" : "";
+}
+
+function genderText(value) {
+  if (value === undefined || value === null || value === "") return "";
+  const text = String(value).trim();
+  if (/^(女|female|f|2)$/i.test(text)) return "女";
+  if (/^(男|male|m|1)$/i.test(text)) return "男";
+  return text;
+}
+
+function jsonValue(value) {
+  if (!value) return null;
+  if (typeof value === "object") return value;
+  try {
+    return JSON.parse(String(value));
+  } catch {
+    return null;
+  }
+}
+
+function ratioNumber(value) {
+  if (value === undefined || value === null || value === "") return null;
+  const text = String(value);
+  const match = text.match(/-?\d+(?:\.\d+)?/);
+  if (!match) return null;
+  return Number(match[0]);
+}
+
+function sortedDistributionEntries(value) {
+  const parsed = jsonValue(value) || value;
+  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+    const nested = parsed.segments || parsed.top_regions || parsed.top_cities || parsed.top_devices || parsed.interests || parsed.top_interests;
+    if (Array.isArray(nested)) return sortedDistributionEntries(nested);
+  }
+  if (Array.isArray(parsed)) {
+    return parsed.map((item) => {
+      if (Array.isArray(item)) return { name: item[0], value: item[1] };
+      if (item && typeof item === "object") {
+        return {
+          name: item.name || item.label || item.key || item.region || item.city || item.device || item.topic || item.title,
+          value: item.value ?? item.ratio ?? item.percent ?? item.rate ?? item.count
+        };
+      }
+      return { name: item, value: "" };
+    }).filter((item) => item.name !== undefined && item.name !== null && item.name !== "");
+  }
+  if (parsed && typeof parsed === "object") {
+    return Object.entries(parsed)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => (ratioNumber(b.value) || 0) - (ratioNumber(a.value) || 0));
+  }
+  if (typeof parsed === "string") {
+    return parsed.split(/[;；,，、\n]/).map((part) => ({ name: part.trim(), value: "" })).filter((item) => item.name);
+  }
+  return [];
+}
+
+function distributionTopText(value, index) {
+  const item = sortedDistributionEntries(value)[index - 1];
+  if (!item) return "";
+  const valueText = percentText(item.value);
+  return valueText ? `${item.name}-${valueText}` : String(item.name || "");
+}
+
+function ageRatioValues(row) {
+  return {
+    "<18": valueForCanonicalField(row, "<18粉丝占比") || rawValueByKeys(row, ["fans_under_18_ratio", "fans_0_17_ratio", "fans_lt_18_ratio"]),
+    "18-24": valueForCanonicalField(row, "18-24粉丝占比"),
+    "25-34": valueForCanonicalField(row, "25-34粉丝占比"),
+    "35-44": valueForCanonicalField(row, "35-44粉丝占比"),
+    ">44": valueForCanonicalField(row, "44岁以上粉丝占比")
+  };
+}
+
+function topAgeSegment(row) {
+  const entries = Object.entries(ageRatioValues(row))
+    .map(([name, value]) => ({ name, value: ratioNumber(value) }))
+    .filter((item) => item.value !== null);
+  entries.sort((a, b) => b.value - a.value);
+  return entries[0]?.name || "";
+}
+
+function referenceContextHas(column, pattern) {
+  return pattern.test(`${column.contextHeader || ""} ${column.fieldName || ""}`);
+}
+
+function firstReferenceValue(row, fields) {
+  for (const field of fields) {
+    const value = valueForCanonicalField(row, field);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+}
+
+function firstRawValue(row, keys) {
+  for (const key of keys) {
+    const value = rawValueByKeys(row, [key]);
+    if (value !== undefined && value !== null && value !== "") return value;
+  }
+  return "";
+}
+
+function compactTagText(value) {
+  if (value === undefined || value === null || value === "") return "";
+  if (typeof value === "string") {
+    const parsed = /^[\[{]/.test(value.trim()) ? jsonValue(value) : null;
+    if (parsed && typeof parsed === "object") return compactTagText(parsed);
+    return cleanJsonText(value);
+  }
+  if (Array.isArray(value)) return value.map(compactTagText).filter(Boolean).join("；");
+  if (typeof value === "object") {
+    const direct = firstDefined(value.name, value.label, value.tag, value.contentTag, value.taxonomy1Tag, value.industryTag);
+    const children = firstDefined(value.taxonomy2Tags, value.children, value.tags);
+    const parts = [direct, compactTagText(children)].map((item) => cleanJsonText(item)).filter(Boolean);
+    return parts.join("-");
+  }
+  return cleanJsonText(value);
+}
+
+function redBookProfileUrlFromRow(row) {
+  const existing = valueForCanonicalField(row, "主页链接") || firstRawValue(row, ["profileUrl", "profile_url", "homePageUrl", "redBookUrl"]);
+  if (existing) return existing;
+  const userId = cleanPgyUserId(firstRawValue(row, ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id"]));
+  return userId ? `https://www.xiaohongshu.com/user/profile/${userId}` : "";
+}
+
+function pgyProfileUrlFromRow(row) {
+  const existing = valueForCanonicalField(row, "蒲公英链接") || firstRawValue(row, ["pgyUrl", "pgy_url", "pgyProfileUrl"]);
+  if (existing) return existing;
+  const userId = cleanPgyUserId(firstRawValue(row, ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id"]));
+  return userId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}` : "";
+}
+
+function valueForReferenceColumn(row, column) {
+  const exact = exactReferenceValue(row, column);
+  if (exact !== "") return exact;
+
+  const leaf = column.leafHeader;
+  const isDaily = referenceContextHas(column, /日常/);
+  const isCoopScale = referenceContextHas(column, /按规模-合作/);
+  const isNinetyDays = referenceContextHas(column, /近90天|全部流量/);
+
+  switch (leaf) {
+    case "博主ID":
+      return cleanPgyUserId(valueForCanonicalField(row, "达人ID") || rawValueByKeys(row, ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id"]));
+    case "小红书号":
+      return valueForCanonicalField(row, "小红书号");
+    case "昵称":
+      return valueForCanonicalField(row, "达人昵称") || valueForCanonicalField(row, "达人名称");
+    case "性别":
+      return genderText(rawValueByKeys(row, ["gender", "sex", "genderName", "sexName"]));
+    case "所属机构":
+      return valueForCanonicalField(row, "所属机构") || rawValueByKeys(row, ["mcnName", "mcn_name", "agencyName", "organizationName", "orgName", "companyName", "bloggerCompany", "organization_name"]);
+    case "粉丝数（万）":
+      return valueForCanonicalField(row, "粉丝数w") || valueInWan(valueForCanonicalField(row, "粉丝数"), 2);
+    case "赞藏数（万）":
+      return valueInWan(valueForCanonicalField(row, "获赞与收藏") || fallbackLikedCollectedValue(row), 2);
+    case "博主人设":
+      return compactTagText(firstRawValue(row, ["persona", "bloggerPersona", "personalTags", "featureTags", "bloggerTags", "personality", "characterTags", "tagNames"]));
+    case "内容类型":
+      return compactTagText(firstRawValue(row, ["contentTags", "tradeType", "industryTag", "type"])) || valueForCanonicalField(row, "账号类型") || valueForCanonicalField(row, "笔记类型");
+    case "地理位置":
+      return valueForCanonicalField(row, "IP城市");
+    case "小红书主页":
+      return redBookProfileUrlFromRow(row);
+    case "蒲公英主页":
+      return pgyProfileUrlFromRow(row);
+    case "健康等级":
+      return firstRawValue(row, ["healthLevel", "health_level", "healthLevelName", "healthGrade", "currentLevel"]);
+    case "下月健康等级":
+      return firstRawValue(row, ["nextMonthHealthLevel", "next_health_level", "nextHealthLevelName", "nextLevel"]);
+    case "图文笔记一口价":
+      return valueForCanonicalField(row, "图文报价") || valueForCanonicalField(row, "平台报价");
+    case "视频笔记一口价":
+      return valueForCanonicalField(row, "视频报价");
+    case "图文笔记一口价(含平台服务费)":
+      return priceWithServiceFee(valueForCanonicalField(row, "图文报价") || valueForCanonicalField(row, "平台报价"));
+    case "视频笔记一口价(含平台服务费)":
+      return priceWithServiceFee(valueForCanonicalField(row, "视频报价"));
+    case "图文笔记接单状态":
+      return stateText(rawValueByKeys(row, ["pictureState", "picture_state", "imageState", "picState"]), valueForCanonicalField(row, "图文报价"));
+    case "视频笔记接单状态":
+      return stateText(rawValueByKeys(row, ["videoState", "video_state"]), valueForCanonicalField(row, "视频报价"));
+    case "添加时间":
+      return valueForCanonicalField(row, "采集时间") || valueForCanonicalField(row, "详情补采时间");
+    case "曝光中位数":
+      return isCoopScale || isNinetyDays ? valueForCanonicalField(row, "曝光中位数（合作）") : valueForCanonicalField(row, "曝光中位数（日常）");
+    case "阅读中位数":
+      return isCoopScale || isNinetyDays ? valueForCanonicalField(row, "阅读中位数（合作）") : valueForCanonicalField(row, "阅读中位数（日常）");
+    case "互动中位数":
+      return isCoopScale || isNinetyDays ? valueForCanonicalField(row, "互动中位数（合作）") : valueForCanonicalField(row, "互动中位数（日常）");
+    case "外溢进店中位数":
+      return firstRawValue(row, ["overflowNum", "overflowStoreMedian", "overflowShopMedian", "shopVisitMedian", "mCpuvNum", "mcpuvNum30d", "mCpuvNum30d"]);
+    case "发布笔记":
+      return valueForCanonicalField(row, "已合作笔记数") || rawValueByKeys(row, ["publishNoteCount", "publish_note_count", "noteCount", "noteCnt"]);
+    case "预估CPM":
+      return firstRawValue(row, ["estimatePictureCpm", "estimateVideoCpm"]) || valueForCanonicalField(row, "CPM");
+    case "预估阅读单价":
+      return firstReferenceValue(row, ["图文预估阅读单价", "视频预估阅读单价"]);
+    case "预估互动单价":
+      return firstReferenceValue(row, ["图文预估互动单价", "视频预估互动单价", "CPE"]);
+    case "中位点赞量":
+      return firstRawValue(row, ["medianLikeCount", "likeMedian", "likeMidNum", "likeMidNum30d"]);
+    case "中位收藏量":
+      return firstRawValue(row, ["medianCollectCount", "collectMedian", "collectMidNum", "collectMidNum30d"]);
+    case "中位评论量":
+      return firstRawValue(row, ["medianCommentCount", "commentMedian", "commentMidNum", "commentMidNum30d"]);
+    case "中位分享量":
+      return firstRawValue(row, ["medianShareCount", "shareMedian", "shareMidNum", "shareMidNum30d"]);
+    case "中位关注量":
+      return firstRawValue(row, ["medianFollowCount", "followMedian", "followMidNum", "followMidNum30d", "mFollowCnt", "mfollowCnt"]);
+    case "互动率":
+      return percentText(firstRawValue(row, ["interactionRate", "engagementRate", "engageRate"]));
+    case "千赞笔记比例":
+      return percentPointText(firstRawValue(row, ["thousandLikePercent30"]));
+    case "百赞笔记比例":
+      return percentPointText(firstRawValue(row, ["hundredLikePercent30"]));
+    case "视频完播率":
+      return percentPointText(valueForCanonicalField(row, "完播率"));
+    case "图文3秒阅读率":
+      return valueForCanonicalField(row, "图文3秒阅读率") || percentText(firstRawValue(row, ["picture3sViewRate", "picture3sViewRate30", "picture3sReadRate", "pictureThreeSecondReadRate", "pic3sReadRate", "picture_3s_read_rate"]));
+    case "粉丝增量":
+      return firstRawValue(row, ["fans30GrowthNum", "fansIncrease", "fans_increment", "fansGrowthNum", "fansGrowthCount", "fansRiseNum"]);
+    case "粉丝量变化幅度":
+      return valueForCanonicalField(row, "粉丝增长率") || percentPointText(firstRawValue(row, ["fans30GrowthRate", "fansGrowthRate", "fans_growth_ratio", "fans_growth_rate"]));
+    case "活跃粉丝占比":
+      return percentPointText(valueForCanonicalField(row, "活跃粉丝占比") || firstRawValue(row, ["fansActiveIn28dLv"]));
+    case "阅读粉丝占比":
+      return valueForCanonicalField(row, "阅读粉丝占比");
+    case "互动粉丝占比":
+      return percentPointText(valueForCanonicalField(row, "互动粉丝占比") || firstRawValue(row, ["fansEngageNum30dLv"]));
+    case "下单粉丝占比":
+      return valueForCanonicalField(row, "下单粉丝占比");
+    case "性别分布-男粉占比":
+      return valueForCanonicalField(row, "男性粉丝占比");
+    case "性别分布-女粉占比":
+      return valueForCanonicalField(row, "女性粉丝占比");
+    case "年龄分布-占比最高年龄段":
+      return topAgeSegment(row);
+    case "年龄分布-<18":
+      return percentText(ageRatioValues(row)["<18"]);
+    case "年龄分布-18-24":
+      return valueForCanonicalField(row, "18-24粉丝占比");
+    case "年龄分布-25-34":
+      return valueForCanonicalField(row, "25-34粉丝占比");
+    case "年龄分布-35-44":
+      return valueForCanonicalField(row, "35-44粉丝占比");
+    case "年龄分布->44":
+      return valueForCanonicalField(row, "44岁以上粉丝占比");
+    default:
+      break;
+  }
+
+  let match = leaf.match(/^地域分布\(省\)-TOP(\d+)$/);
+  if (match) return distributionTopText(valueForCanonicalField(row, "粉丝地域分布") || rawValueByKeys(row, ["provinceDistribution", "province_distribution"]), Number(match[1]));
+  match = leaf.match(/^地域分布\(市\)-TOP(\d+)$/);
+  if (match) return distributionTopText(valueForCanonicalField(row, "粉丝城市分布") || rawValueByKeys(row, ["cityDistribution", "city_distribution"]), Number(match[1]));
+  match = leaf.match(/^用户设备分布-TOP(\d+)$/);
+  if (match) return distributionTopText(valueForCanonicalField(row, "用户设备分布"), Number(match[1]));
+  match = leaf.match(/^兴趣分布-TOP(\d+)$/);
+  if (match) return distributionTopText(valueForCanonicalField(row, "用户兴趣分布") || valueForCanonicalField(row, "用户兴趣"), Number(match[1]));
+
+  if (column.canonicalField) return valueForCanonicalField(row, column.canonicalField);
+  return "";
 }
 
 function hasBlankMappedDetailCell(item, columns) {
@@ -1053,7 +2036,7 @@ async function appendSheetRows(token, spreadsheetToken, sheetId, fields, rows) {
   const values = rows.map((row) => {
     const line = Array(end - start + 1).fill("");
     for (const field of ordered) {
-      line[field.columnIndex + 1 - start] = rowValueForField(row, field.fieldName);
+      line[field.columnIndex + 1 - start] = normalizeSheetWriteValue(rowValueForField(row, field.fieldName), field.fieldName);
     }
     return line;
   });
@@ -1103,11 +2086,41 @@ async function listBitableFields(token, appToken, tableId) {
   return data.items || data.fields || [];
 }
 
-async function createBitableField(token, appToken, tableId, fieldName) {
+function bitableFieldName(field) {
+  return field?.field_name || field?.name || "";
+}
+
+function bitableFieldType(field) {
+  const raw = field?.type ?? field?.field_type ?? field?.ui_type ?? field?.property?.type;
+  const number = Number(raw);
+  return Number.isFinite(number) ? number : raw;
+}
+
+function isBitableAttachmentField(field) {
+  return bitableFieldType(field) === BITABLE_ATTACHMENT_FIELD_TYPE;
+}
+
+function bitableScreenshotKind(fieldName) {
+  if (fieldName === DETAIL_FIELDS[6]) return "audience";
+  if (fieldName === DETAIL_FIELDS[7]) return "overview";
+  return "";
+}
+
+function bitableAttachmentScreenshotKind(fieldName) {
+  if (fieldName === DETAIL_FIELDS[6] || fieldName === screenshotAttachmentFallbackFieldName(DETAIL_FIELDS[6])) return "audience";
+  if (fieldName === DETAIL_FIELDS[7] || fieldName === screenshotAttachmentFallbackFieldName(DETAIL_FIELDS[7])) return "overview";
+  return "";
+}
+
+function isBitableScreenshotField(fieldName) {
+  return Boolean(bitableScreenshotKind(fieldName));
+}
+
+async function createBitableField(token, appToken, tableId, fieldName, type = BITABLE_TEXT_FIELD_TYPE) {
   const data = await feishuFetch(`/bitable/v1/apps/${appToken}/tables/${tableId}/fields`, {
     token,
     method: "POST",
-    body: { field_name: fieldName, type: 1 }
+    body: { field_name: fieldName, type }
   });
   return data.field || data;
 }
@@ -1118,7 +2131,7 @@ async function ensureBitableFields(token, appToken, tableId, rows) {
 
 async function ensureBitableFieldNames(token, appToken, tableId, requiredFields) {
   const fields = await listBitableFields(token, appToken, tableId);
-  const existingNames = new Set(fields.map((field) => field.field_name || field.name).filter(Boolean));
+  const existingNames = new Set(fields.map((field) => bitableFieldName(field)).filter(Boolean));
   for (const fieldName of requiredFields) {
     if (!existingNames.has(fieldName)) {
       const created = await createBitableField(token, appToken, tableId, fieldName);
@@ -1129,14 +2142,111 @@ async function ensureBitableFieldNames(token, appToken, tableId, requiredFields)
   return requiredFields;
 }
 
+function findBitableFieldByName(fields, fieldName) {
+  return fields.find((field) => bitableFieldName(field) === fieldName) || null;
+}
+
+function screenshotAttachmentFallbackFieldName(fieldName) {
+  return `${fieldName}附件`;
+}
+
+function bitableScreenshotAttachmentField(fields, fieldName) {
+  const preferred = findBitableFieldByName(fields, fieldName);
+  if (preferred && isBitableAttachmentField(preferred)) return preferred;
+  const fallbackName = screenshotAttachmentFallbackFieldName(fieldName);
+  return findBitableFieldByName(fields, fallbackName);
+}
+
+async function ensureBitableDetailFields(token, appToken, tableId) {
+  let fields = await listBitableFields(token, appToken, tableId);
+  const existingNames = new Set(fields.map((field) => bitableFieldName(field)).filter(Boolean));
+  for (const fieldName of DETAIL_FIELDS) {
+    if (isBitableScreenshotField(fieldName)) {
+      const existing = findBitableFieldByName(fields, fieldName);
+      if (existing && isBitableAttachmentField(existing)) continue;
+      const attachmentName = existing ? screenshotAttachmentFallbackFieldName(fieldName) : fieldName;
+      if (!existingNames.has(attachmentName)) {
+        const created = await createBitableField(token, appToken, tableId, attachmentName, BITABLE_ATTACHMENT_FIELD_TYPE);
+        fields.push(created);
+        existingNames.add(attachmentName);
+      }
+      continue;
+    }
+    if (!existingNames.has(fieldName)) {
+      const created = await createBitableField(token, appToken, tableId, fieldName, BITABLE_TEXT_FIELD_TYPE);
+      fields.push(created);
+      existingNames.add(fieldName);
+    }
+  }
+  return fields;
+}
+
+async function ensureMappedBitableFields(token, appToken, tableId, rows) {
+  const fields = await listBitableFields(token, appToken, tableId);
+  const requiredFields = exportFieldsForRows(rows);
+  const mapped = [];
+  const existingNames = new Set();
+  const usedNames = new Set();
+
+  for (const field of fields) {
+    const fieldName = field.field_name || field.name;
+    if (!fieldName) continue;
+    existingNames.add(fieldName);
+    const canonicalField = canonicalFieldForHeader(fieldName);
+    const hasSourceValue = rows.some((row) => {
+      const value = rowValueForField(row, fieldName);
+      return value !== undefined && value !== null && value !== "";
+    });
+    if (!canonicalField && !hasSourceValue) continue;
+    mapped.push({
+      fieldName,
+      canonicalField
+    });
+    usedNames.add(fieldName);
+  }
+
+  for (const fieldName of requiredFields) {
+    const canonicalField = canonicalFieldForHeader(fieldName) || fieldName;
+    const alreadyMapped = mapped.some((field) => {
+      if (field.fieldName === fieldName) return true;
+      return field.canonicalField && field.canonicalField === canonicalField;
+    });
+    if (alreadyMapped) continue;
+    if (!existingNames.has(fieldName)) {
+      await createBitableField(token, appToken, tableId, fieldName);
+      existingNames.add(fieldName);
+    }
+    if (!usedNames.has(fieldName)) {
+      mapped.push({ fieldName, canonicalField });
+      usedNames.add(fieldName);
+    }
+  }
+
+  return mapped;
+}
+
 function bitableFieldsForRow(row, fieldNames) {
   const values = {};
   for (const fieldName of fieldNames) {
-    const value = rowValueForField(row, fieldName);
+    const directValue = row && Object.prototype.hasOwnProperty.call(row, fieldName) ? row[fieldName] : undefined;
+    const value = directValue !== undefined ? directValue : rowValueForField(row, fieldName);
     if (value === undefined || value === null) values[fieldName] = "";
+    else if (isBitableAttachmentValue(value)) values[fieldName] = value;
     else if (typeof value === "number" || typeof value === "boolean") values[fieldName] = value;
     else if (typeof value === "object") values[fieldName] = JSON.stringify(value);
     else values[fieldName] = String(value);
+  }
+  return values;
+}
+
+function bitableFieldsForMappedRow(row, mappedFields) {
+  const values = {};
+  for (const field of mappedFields) {
+    const value = rowValueForMappedColumn(row, field);
+    if (value === undefined || value === null) values[field.fieldName] = "";
+    else if (typeof value === "number" || typeof value === "boolean") values[field.fieldName] = value;
+    else if (typeof value === "object") values[field.fieldName] = JSON.stringify(value);
+    else values[field.fieldName] = String(value);
   }
   return values;
 }
@@ -1156,19 +2266,105 @@ async function appendBitableRecords(token, appToken, tableId, fieldNames, rows) 
   return { writtenCount };
 }
 
+async function appendMappedBitableRecords(token, appToken, tableId, mappedFields, rows) {
+  let writtenCount = 0;
+  const batches = chunkArray(rows, 500);
+  for (const batch of batches) {
+    const records = batch.map((row) => ({ fields: bitableFieldsForMappedRow(row, mappedFields) }));
+    const data = await feishuFetch(`/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_create`, {
+      token,
+      method: "POST",
+      body: { records }
+    });
+    writtenCount += (data.records || data.items || []).length || records.length;
+  }
+  return { writtenCount };
+}
+
+function rowMatchesAny(sourceRow, targetRow) {
+  const sourceKeys = new Set(rowMatchKeys(sourceRow));
+  if (!sourceKeys.size) return false;
+  return rowMatchKeys(targetRow).some((key) => sourceKeys.has(key));
+}
+
+function rowForMappedFields(row, mappedFields) {
+  const fields = {};
+  for (const field of mappedFields || []) {
+    const value = rowValueForMappedColumn(row, field);
+    if (value === undefined || value === null || value === "") continue;
+    if (isBitableAttachmentValue(value)) fields[field.fieldName] = value;
+    else fields[field.fieldName] = typeof value === "object" ? JSON.stringify(value) : value;
+  }
+  return fields;
+}
+
 async function syncRowsToBitable({ token, parsed, rows, options }) {
-  const tableId = await chooseBitableTable(token, parsed.token, options.feishuSheetId || parsed.tableId || "");
-  const fieldNames = await ensureBitableFields(token, parsed.token, tableId, rows);
-  const result = await appendBitableRecords(token, parsed.token, tableId, fieldNames, rows);
-  if (result.writtenCount < rows.length) {
-    throw new Error(`飞书多维表格实际写入记录不足：应写入 ${rows.length} 条，实际 ${result.writtenCount} 条。`);
+  const preferredTableId = options.feishuSheetId || parsed.tableId || "";
+  let tableId = "";
+  if (preferredTableId) {
+    tableId = await chooseBitableTable(token, parsed.token, preferredTableId);
+  } else {
+    const tables = await listBitableTables(token, parsed.token);
+    if (!tables.length) throw new Error("目标飞书多维表格没有可写入的数据表。");
+    if (tables.length > 1 && !options.syncUseFirstSheet) {
+      throw new Error(`检测到 ${tables.length} 个数据表，请填写同步子表 ID，或勾选“使用首个子表”。`);
+    }
+    tableId = tables[0]?.table_id || tables[0]?.id || "";
+  }
+  const mappedFields = await ensureMappedBitableFields(token, parsed.token, tableId, rows);
+  const records = await readBitableRecords(token, parsed.token, tableId);
+  const updateExisting = Boolean(options.syncUpdateExisting);
+  const newRows = [];
+  const handledRecordIds = new Set();
+  let updatedCount = 0;
+  let skippedCount = 0;
+
+  for (const row of rows) {
+    const existing = records.find((record) => rowMatchesAny(row, record.fields || {}));
+    if (!existing) {
+      if (newRows.some((newRow) => rowMatchesAny(row, newRow))) {
+        skippedCount += 1;
+        continue;
+      }
+      newRows.push(row);
+      continue;
+    }
+    const recordId = existing.record_id || existing.id;
+    if (handledRecordIds.has(recordId)) {
+      skippedCount += 1;
+      continue;
+    }
+    handledRecordIds.add(recordId);
+    if (!updateExisting) {
+      skippedCount += 1;
+      continue;
+    }
+    const fields = rowForMappedFields(row, mappedFields);
+    if (Object.keys(fields).length) {
+      await updateBitableRecord(token, parsed.token, tableId, recordId, fields);
+      updatedCount += 1;
+    } else {
+      skippedCount += 1;
+    }
+  }
+
+  const result = newRows.length
+    ? await appendMappedBitableRecords(token, parsed.token, tableId, mappedFields, newRows)
+    : { writtenCount: 0 };
+  if (result.writtenCount < newRows.length) {
+    throw new Error(`飞书多维表格实际写入记录不足：应新增 ${newRows.length} 条，实际 ${result.writtenCount} 条。`);
   }
   return {
     ok: true,
     resourceType: "bitable",
     tableId,
-    fieldCount: fieldNames.length,
-    writtenCount: result.writtenCount,
+    fieldCount: mappedFields.length,
+    mappedColumns: mappedFields.filter((field) => field.canonicalField).length,
+    writtenCount: result.writtenCount + updatedCount,
+    appendedCount: result.writtenCount,
+    updatedCount,
+    skippedCount,
+    inputCount: rows.length,
     result
   };
 }
@@ -1196,9 +2392,18 @@ function bitableRecordToDetailItem(record) {
   };
 }
 
-function bitableNeedsDetail(item) {
+function bitableNeedsDetail(item, fieldsMeta = [], options = {}) {
   if (!Object.values(item.row || {}).some(nonEmptyCell)) return false;
   if (!extractPgyUserId(item.row) && !detailUrlFromRow(item.row)) return false;
+  const needsScreenshotAttachment = fieldsMeta.some((field) => {
+    if (!isBitableAttachmentField(field)) return false;
+    const fieldName = bitableFieldName(field);
+    const kind = bitableAttachmentScreenshotKind(fieldName);
+    if (kind === "audience" && !shouldCaptureFansScreenshot(options)) return false;
+    if (kind === "overview" && !shouldCaptureNoteScreenshot(options)) return false;
+    return Boolean(kind) && !nonEmptyCell(item.row[fieldName]);
+  });
+  if (needsScreenshotAttachment) return true;
   return DETAIL_FIELDS.some((fieldName) => !nonEmptyCell(item.row[fieldName]));
 }
 
@@ -1206,16 +2411,91 @@ function bitableDetailFields(valuesByField, captures) {
   const fields = {};
   for (const fieldName of DETAIL_FIELDS) {
     if (fieldName === "粉丝画像截图") {
+      if (!isFansScreenshotEnabledFromCaptures(captures)) continue;
       fields[fieldName] = captures.audience?.imageName || (captures.audience?.screenshot ? "已采集粉丝画像截图" : "");
       continue;
     }
     if (fieldName === "笔记数据截图") {
+      if (!isNoteScreenshotEnabledFromCaptures(captures)) continue;
       fields[fieldName] = captures.overview?.imageName || (captures.overview?.screenshot ? "已采集笔记数据截图" : "");
       continue;
     }
     const value = valueForCanonicalField(valuesByField, fieldName);
     if (value !== undefined && value !== null && value !== "") fields[fieldName] = value;
   }
+  return fields;
+}
+
+function isBitableAttachmentValue(value) {
+  return Array.isArray(value) && value.every((item) => item && typeof item === "object" && (item.file_token || item.fileToken));
+}
+
+function bitableBaseDetailFields(valuesByField, captures) {
+  const fields = {};
+  for (const fieldName of DETAIL_FIELDS) {
+    if (fieldName === DETAIL_FIELDS[6]) {
+      if (!isFansScreenshotEnabledFromCaptures(captures)) continue;
+      fields[fieldName] = captures?.audience?.imageName || (captures?.audience?.screenshot ? "已采集粉丝画像截图" : "");
+      continue;
+    }
+    if (fieldName === DETAIL_FIELDS[7]) {
+      if (!isNoteScreenshotEnabledFromCaptures(captures)) continue;
+      fields[fieldName] = captures?.overview?.imageName || (captures?.overview?.screenshot ? "已采集笔记数据截图" : "");
+      continue;
+    }
+    const value = valueForCanonicalField(valuesByField, fieldName);
+    if (value !== undefined && value !== null && value !== "") fields[fieldName] = value;
+  }
+  return fields;
+}
+
+async function uploadBitableScreenshot(token, appToken, dataUrl, name) {
+  if (!dataUrl) return "";
+  const blob = dataUrlBlob(dataUrl, "image/png");
+  const form = new FormData();
+  form.append("file_name", name || `pgy-detail-${Date.now()}.png`);
+  form.append("parent_type", "bitable_image");
+  form.append("parent_node", appToken);
+  form.append("size", String(blob.size));
+  form.append("file", blob, name || "pgy-detail.png");
+  const data = await feishuFormFetch("/drive/v1/medias/upload_all", { token, form });
+  return data.file_token || data.fileToken || "";
+}
+
+async function putBitableScreenshotAttachment(fields, { token, appToken, fieldsMeta, fieldName, kind, capture }) {
+  if (kind === "overview" && !isNoteScreenshotEnabledFromCaptures({ overview: capture })) return;
+  if (kind === "audience" && !isFansScreenshotEnabledFromCaptures({ audience: capture })) return;
+  if (!capture?.screenshot) return;
+  const attachmentField = bitableScreenshotAttachmentField(fieldsMeta, fieldName);
+  if (!attachmentField) return;
+  const targetName = bitableFieldName(attachmentField);
+  const fileToken = await uploadBitableScreenshot(token, appToken, capture.screenshot, capture.imageName || `${fieldName}.png`);
+  if (!fileToken) return;
+  fields[targetName] = [{ file_token: fileToken }];
+  const originalField = findBitableFieldByName(fieldsMeta, fieldName);
+  if (originalField && !isBitableAttachmentField(originalField) && targetName !== fieldName) {
+    fields[fieldName] = capture.imageName || "已采集截图，见附件字段";
+  }
+}
+
+async function bitableDetailFieldsWithAttachments({ token, appToken, fieldsMeta, valuesByField, captures }) {
+  const fields = bitableBaseDetailFields(valuesByField, captures);
+  await putBitableScreenshotAttachment(fields, {
+    token,
+    appToken,
+    fieldsMeta,
+    fieldName: DETAIL_FIELDS[6],
+    kind: "audience",
+    capture: captures?.audience
+  });
+  await putBitableScreenshotAttachment(fields, {
+    token,
+    appToken,
+    fieldsMeta,
+    fieldName: DETAIL_FIELDS[7],
+    kind: "overview",
+    capture: captures?.overview
+  });
   return fields;
 }
 
@@ -1238,24 +2518,90 @@ async function syncRowsToFeishu({ rows, options }) {
   const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
   if (parsed.resourceType === "bitable") return syncRowsToBitable({ token, parsed, rows, options });
   if (parsed.resourceType !== "sheet") throw new Error("同步达人当前仅支持飞书电子表格或多维表格。");
-  const sheetId = await chooseSheet(token, parsed.token, options.feishuSheetId || parsed.sheetId || "");
-  const beforeRowCount = nonEmptyDataRowCount(await readSheetValuesFlexible(token, parsed.token, sheetId));
-  const fields = await ensureSheetFields(token, parsed.token, sheetId, rows, exportFieldsForRows(rows));
-  const result = await appendSheetRows(token, parsed.token, sheetId, fields, rows);
+  const preferredSheetId = options.feishuSheetId || parsed.sheetId || "";
+  let sheetId = "";
+  if (preferredSheetId) {
+    sheetId = await chooseSheet(token, parsed.token, preferredSheetId);
+  } else {
+    const sheets = await listSheets(token, parsed.token);
+    if (!sheets.length) throw new Error("目标飞书电子表格没有可写入的子表。");
+    if (sheets.length > 1 && !options.syncUseFirstSheet) {
+      throw new Error(`检测到 ${sheets.length} 个子表，请填写同步子表 ID，或勾选“使用首个子表”。`);
+    }
+    sheetId = sheets[0]?.sheet_id || sheets[0]?.id || "";
+  }
+  const beforeValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
+  const beforeRowCount = nonEmptyDataRowCount(beforeValues);
+  const shape = await ensureMappedSheetShape(token, parsed.token, sheetId, beforeValues, rows);
+  const latestValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
+  const latestShape = detectSheetShape(latestValues);
+  const sheetItems = sheetRowsToShapeObjects(latestValues, latestShape).filter((item) => Object.values(item.row || {}).some(nonEmptyCell));
+  const updateExisting = Boolean(options.syncUpdateExisting);
+  const newRows = [];
+  const handledRowNumbers = new Set();
+  let updatedCount = 0;
+  let skippedCount = 0;
+  for (const row of rows) {
+    const existing = sheetItems.find((item) => rowMatchesAny(row, item.row));
+    if (!existing) {
+      if (newRows.some((newRow) => rowMatchesAny(row, newRow))) {
+        skippedCount += 1;
+        continue;
+      }
+      newRows.push(row);
+      continue;
+    }
+    if (handledRowNumbers.has(existing.rowNumber)) {
+      skippedCount += 1;
+      continue;
+    }
+    handledRowNumbers.add(existing.rowNumber);
+    if (!updateExisting) {
+      skippedCount += 1;
+      continue;
+    }
+    let rowWrites = 0;
+    for (const column of latestShape.columns) {
+      if (!column.canonicalField && !column.fieldName) continue;
+      const value = rowValueForMappedColumn(row, column);
+      if (value === undefined || value === null || value === "") continue;
+      const cellResult = await writeSheetCellByColumnBestEffort(
+        token,
+        parsed.token,
+        sheetId,
+        column.columnIndex,
+        existing.rowNumber,
+        value,
+        column.fieldName || column.canonicalField
+      );
+      if (cellResult.ok) rowWrites += 1;
+    }
+    if (rowWrites) updatedCount += 1;
+    else skippedCount += 1;
+  }
+  const result = newRows.length
+    ? await appendMappedSheetRows(token, parsed.token, sheetId, shape, newRows)
+    : { updates: { updatedRows: 0 } };
   const actualWrittenCount = appendWrittenCount(result);
-  if (actualWrittenCount && actualWrittenCount < rows.length) {
-    throw new Error(`飞书返回的实际写入行数不足：应写入 ${rows.length} 条，实际 ${actualWrittenCount} 条。`);
+  if (actualWrittenCount && actualWrittenCount < newRows.length) {
+    throw new Error(`飞书返回的实际写入行数不足：应新增 ${newRows.length} 条，实际 ${actualWrittenCount} 条。`);
   }
   const afterRowCount = nonEmptyDataRowCount(await readSheetValuesFlexible(token, parsed.token, sheetId));
-  if (afterRowCount < beforeRowCount + rows.length) {
-    throw new Error(`飞书写入后读回校验失败：写入前 ${beforeRowCount} 行，预期写入后至少 ${beforeRowCount + rows.length} 行，实际 ${afterRowCount} 行。请检查目标表是否为电子表格、是否选对了子表，以及权限是否为可编辑。`);
+  if (afterRowCount < beforeRowCount + newRows.length) {
+    throw new Error(`飞书写入后读回校验失败：写入前 ${beforeRowCount} 行，预期写入后至少 ${beforeRowCount + newRows.length} 行，实际 ${afterRowCount} 行。请检查目标表是否为电子表格、是否选对了子表，以及权限是否为可编辑。`);
   }
   return {
     ok: true,
     resourceType: "sheet",
     sheetId,
-    fieldCount: fields.length,
-    writtenCount: rows.length,
+    fieldCount: shape.columns.length,
+    mappedColumns: shape.columns.filter((column) => column.canonicalField).length,
+    headerRows: shape.headerRows,
+    writtenCount: newRows.length + updatedCount,
+    appendedCount: newRows.length,
+    updatedCount,
+    skippedCount,
+    inputCount: rows.length,
     actualWrittenCount,
     beforeRowCount,
     afterRowCount,
@@ -1287,14 +2633,48 @@ async function validateFeishuSyncTarget(options) {
   const token = await tenantToken(appId, appSecret);
   const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
   if (parsed.resourceType === "bitable") {
-    const tableId = await chooseBitableTable(token, parsed.token, options.feishuSheetId || parsed.tableId || "");
+    const tables = await listBitableTables(token, parsed.token);
+    if (!tables.length) throw new Error("目标飞书多维表格没有可写入的数据表。");
+    const preferredTableId = options.feishuSheetId || parsed.tableId || "";
+    if (tables.length > 1 && !preferredTableId && !options.syncUseFirstSheet) {
+      return {
+        ok: true,
+        resourceType: "bitable",
+        requiresMultiSheetChoice: true,
+        tableCount: tables.length,
+        tables: tables.map((table) => ({
+          tableId: table.table_id || table.id,
+          title: table.name || table.title || table.table_id || table.id
+        }))
+      };
+    }
+    const tableId = preferredTableId
+      ? await chooseBitableTable(token, parsed.token, preferredTableId)
+      : (tables[0]?.table_id || tables[0]?.id);
     await listBitableFields(token, parsed.token, tableId);
-    return { ok: true, resourceType: "bitable", tableId };
+    return { ok: true, resourceType: "bitable", tableId, tableCount: tables.length };
   }
   if (parsed.resourceType !== "sheet") throw new Error("同步达人当前仅支持飞书电子表格或多维表格。");
-  const sheetId = await chooseSheet(token, parsed.token, options.feishuSheetId || parsed.sheetId || "");
+  const sheets = await listSheets(token, parsed.token);
+  if (!sheets.length) throw new Error("目标飞书电子表格没有可写入的子表。");
+  const preferredSheetId = options.feishuSheetId || parsed.sheetId || "";
+  if (sheets.length > 1 && !preferredSheetId && !options.syncUseFirstSheet) {
+    return {
+      ok: true,
+      resourceType: "sheet",
+      requiresMultiSheetChoice: true,
+      sheetCount: sheets.length,
+      sheets: sheets.map((sheet) => ({
+        sheetId: sheet.sheet_id || sheet.id,
+        title: sheet.title || sheet.name || sheet.sheet_id || sheet.id
+      }))
+    };
+  }
+  const sheetId = preferredSheetId
+    ? await chooseSheet(token, parsed.token, preferredSheetId)
+    : (sheets[0]?.sheet_id || sheets[0]?.id);
   await readSheetFields(token, parsed.token, sheetId);
-  return { ok: true, resourceType: "sheet", sheetId };
+  return { ok: true, resourceType: "sheet", sheetId, sheetCount: sheets.length };
 }
 
 async function validateFeishuCredentials(options) {
@@ -1460,6 +2840,13 @@ function percentText(value) {
   return `${Math.round(ratio * 10000) / 100}%`;
 }
 
+function percentPointText(value) {
+  if (value === null || value === undefined || value === "") return "";
+  const number = numericValue(value);
+  if (typeof number !== "number" || !Number.isFinite(number)) return String(value);
+  return `${Math.round(number * 100) / 100}%`;
+}
+
 function jsonText(value) {
   if (value === null || value === undefined || value === "") return "";
   if (typeof value === "string") return value;
@@ -1491,6 +2878,62 @@ function ratioFromApiValue(value) {
   const number = Number(value);
   if (!Number.isFinite(number)) return null;
   return number > 1 ? number / 100 : number;
+}
+
+function ratioFromTextValue(value) {
+  if (value === null || value === undefined || value === "") return null;
+  const text = String(value);
+  const percent = text.match(/(-?\d+(?:\.\d+)?)\s*%/);
+  if (percent) return ratioFromApiValue(percent[1]);
+  const number = numericValue(text);
+  if (typeof number !== "number" || !Number.isFinite(number)) return null;
+  return ratioFromApiValue(number);
+}
+
+function ageRatiosFromText(text) {
+  const source = String(text || "")
+    .normalize("NFKC")
+    .replace(/[‐‑‒–—－]/g, "-")
+    .replace(/[～]/g, "~")
+    .replace(/\s+/g, " ");
+  const specs = [
+    ["fans_under_18_ratio", /(?:<\s*18|小于\s*18|未满\s*18|18\s*岁以下|0\s*[-~至到]\s*17)[^\d%]{0,24}(-?\d+(?:\.\d+)?)\s*%/i],
+    ["fans_18_24_ratio", /(?:18\s*[-~至到]\s*24|18\s*岁?\s*至\s*24|18\s*到\s*24)[^\d%]{0,24}(-?\d+(?:\.\d+)?)\s*%/i],
+    ["fans_25_34_ratio", /(?:25\s*[-~至到]\s*34|25\s*岁?\s*至\s*34|25\s*到\s*34)[^\d%]{0,24}(-?\d+(?:\.\d+)?)\s*%/i],
+    ["fans_35_44_ratio", /(?:35\s*[-~至到]\s*44|35\s*岁?\s*至\s*44|35\s*到\s*44)[^\d%]{0,24}(-?\d+(?:\.\d+)?)\s*%/i],
+    ["fans_44_plus_ratio", /(?:>\s*44|44\s*\+|44\s*岁?(?:以上|及以上)|大于\s*44|45\s*岁?(?:以上|及以上))[^\d%]{0,24}(-?\d+(?:\.\d+)?)\s*%/i]
+  ];
+  const output = {};
+  for (const [key, pattern] of specs) {
+    const match = source.match(pattern);
+    const ratio = match ? ratioFromApiValue(match[1]) : null;
+    if (ratio !== null) output[key] = ratio;
+  }
+  if (output.fans_35_44_ratio !== undefined || output.fans_44_plus_ratio !== undefined) {
+    output.fans_35_plus_ratio = Math.min((Number(output.fans_35_44_ratio) || 0) + (Number(output.fans_44_plus_ratio) || 0), 1);
+  }
+  return output;
+}
+
+function ageRatiosFromDetailAndCaptures(detail, captures = {}) {
+  const raw = detail?.raw_payload && typeof detail.raw_payload === "object" ? detail.raw_payload : {};
+  const fan = raw.fan_analysis && typeof raw.fan_analysis === "object" ? raw.fan_analysis : {};
+  const textRatios = ageRatiosFromText([
+    captures.audience?.text,
+    detail?.audience_age_distribution,
+    fan.age_distribution,
+    raw.age_distribution
+  ].filter(Boolean).map((value) => (typeof value === "string" ? value : jsonText(value))).join(" "));
+  const output = { ...textRatios };
+  const keys = ["fans_under_18_ratio", "fans_18_24_ratio", "fans_25_34_ratio", "fans_35_44_ratio", "fans_44_plus_ratio", "fans_35_plus_ratio"];
+  for (const key of keys) {
+    const ratio = ratioFromTextValue(valueOrRaw(detail, key));
+    if (ratio !== null) output[key] = ratio;
+  }
+  if (output.fans_35_plus_ratio === undefined && (output.fans_35_44_ratio !== undefined || output.fans_44_plus_ratio !== undefined)) {
+    output.fans_35_plus_ratio = Math.min((Number(output.fans_35_44_ratio) || 0) + (Number(output.fans_44_plus_ratio) || 0), 1);
+  }
+  return output;
 }
 
 function firstDefined(...values) {
@@ -1527,11 +2970,15 @@ function noteCaseFromApiItem(item) {
     brand: cleanJsonText(item.brandName || item.contentTag || item.brand),
     cover_url: cleanJsonText(item.imgUrl || item.imageUrl || item.coverUrl),
     published_at: cleanJsonText(item.date || item.publishTime || item.publish_time),
+    exposure_count: firstDefined(item.impNum, item.exposure_count, item.exposureCount),
     read_count: firstDefined(item.readNum, item.read_count, item.readCount),
+    interaction_count: firstDefined(item.interactionNum, item.interaction_count, item.interactionCount),
     like_count: firstDefined(item.likeNum, item.like_count, item.likeCount),
     save_count: firstDefined(item.collectNum, item.save_count, item.collectCount),
     comment_count: firstDefined(item.cmtNum, item.comment_count, item.commentCount),
     share_count: firstDefined(item.shareNum, item.share_count, item.shareCount),
+    third_read_user_count: firstDefined(item.thirdReadUserNum, item.third_read_user_count),
+    is_advertise: typeof item.isAdvertise === "boolean" ? item.isAdvertise : undefined,
     note_type: item.isVideo ? "视频笔记" : "图文笔记",
     source: "detail_api"
   };
@@ -1541,24 +2988,32 @@ function noteCaseFromApiItem(item) {
   return note.note_id || note.title ? note : null;
 }
 
-function noteCasesFromApiCache(cache, maxCases = 24) {
+function noteCasesFromApiCache(cache, maxCases = 80) {
   const notesDetail = cache?.notes_detail && typeof cache.notes_detail === "object" ? cache.notes_detail : {};
   const cases = [];
   const seen = new Set();
-  for (const noteType of Object.keys(notesDetail)) {
-    const pages = notesDetail[noteType];
-    if (!pages || typeof pages !== "object") continue;
-    for (const pageNo of Object.keys(pages).sort((a, b) => Number(a) - Number(b))) {
-      const payload = pages[pageNo];
-      const list = Array.isArray(payload?.list) ? payload.list : Array.isArray(payload?.items) ? payload.items : [];
-      for (const item of list) {
-        const note = noteCaseFromApiItem(item);
-        if (!note) continue;
-        const key = `${note.note_id || ""}|${note.title || ""}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        cases.push(note);
-        if (cases.length >= maxCases) return cases;
+  const businessBuckets = notesDetail.daily || notesDetail.cooperation
+    ? notesDetail
+    : { unknown: notesDetail };
+  for (const business of Object.keys(businessBuckets)) {
+    const byNoteType = businessBuckets[business];
+    if (!byNoteType || typeof byNoteType !== "object") continue;
+    for (const noteType of Object.keys(byNoteType)) {
+      const pages = byNoteType[noteType];
+      if (!pages || typeof pages !== "object") continue;
+      for (const pageNo of Object.keys(pages).sort((a, b) => Number(a) - Number(b))) {
+        const payload = pages[pageNo];
+        const list = Array.isArray(payload?.list) ? payload.list : Array.isArray(payload?.items) ? payload.items : [];
+        for (const item of list) {
+          const note = noteCaseFromApiItem(item);
+          if (!note) continue;
+          note.business = note.is_advertise ? "cooperation" : business;
+          const key = note.note_id || `${note.business}|${note.title || ""}`;
+          if (seen.has(key)) continue;
+          seen.add(key);
+          cases.push(note);
+          if (cases.length >= maxCases) return cases;
+        }
       }
     }
   }
@@ -1581,8 +3036,13 @@ function mergeDetailApiCache(detail, apiCache) {
   const coopRate = cache.notes_rate?.cooperation && typeof cache.notes_rate.cooperation === "object" ? cache.notes_rate.cooperation : {};
 
   if (profile.name && !result.nickname) result.nickname = cleanJsonText(profile.name);
-  if (profile.redId && !result.xiaohongshu_id) result.xiaohongshu_id = cleanJsonText(profile.redId);
+  const redId = cleanJsonText(firstDefined(profile.redId, profile.red_id, profile.redID, profile.redBookId, profile.redbookId, profile.red_book_id, profile.xiaohongshuId, profile.xiaohongshu_id, profile.xhsId, profile.xhs_id));
+  if (redId && !result.xiaohongshu_id) result.xiaohongshu_id = redId;
   if (profile.location && !result.ip_city) result.ip_city = cleanJsonText(profile.location);
+  if (!result.organization_name) {
+    const organizationName = cleanJsonText(firstDefined(profile.mcnName, profile.mcn_name, profile.agencyName, profile.organizationName, profile.orgName, profile.companyName, profile.bloggerCompany));
+    if (organizationName) result.organization_name = organizationName;
+  }
   if (profile.fansCount !== undefined && !result.followers_count) result.followers_count = numericValue(profile.fansCount);
   if (profile.likeCollectCountInfo !== undefined && !result.liked_collected_count) result.liked_collected_count = numericValue(profile.likeCollectCountInfo);
   if (profile.picturePrice !== undefined && !result.quote_price) result.quote_price = numericValue(profile.picturePrice);
@@ -1634,10 +3094,12 @@ function mergeDetailApiCache(detail, apiCache) {
   const ageSegments = profileDistributionItems(firstDefined(fansProfile.ages, fansProfile.age, fansProfile.ageDistributions), ["group", "name", "label"], ["percent", "ratio", "value"]);
   if (ageSegments.length) {
     for (const item of ageSegments) {
-      if (item.label.includes("18") && !result.fans_18_24_ratio) result.fans_18_24_ratio = item.ratio;
-      if (item.label.includes("25") && !result.fans_25_34_ratio) result.fans_25_34_ratio = item.ratio;
-      if (item.label.includes("35") && !result.fans_35_44_ratio) result.fans_35_44_ratio = item.ratio;
-      if ((item.label.includes(">44") || item.label.includes("44岁以上") || item.label.includes("45")) && !result.fans_44_plus_ratio) result.fans_44_plus_ratio = item.ratio;
+      const label = String(item.label || "");
+      if ((/^<\s*18$/.test(label) || /18岁以下|未满18/.test(label)) && result.fans_under_18_ratio === undefined) result.fans_under_18_ratio = item.ratio;
+      if ((/^18\s*[-~至]\s*24$/.test(label) || /18\s*[-~至]\s*24岁?/.test(label)) && result.fans_18_24_ratio === undefined) result.fans_18_24_ratio = item.ratio;
+      if ((/^25\s*[-~至]\s*34$/.test(label) || /25\s*[-~至]\s*34岁?/.test(label)) && result.fans_25_34_ratio === undefined) result.fans_25_34_ratio = item.ratio;
+      if ((/^35\s*[-~至]\s*44$/.test(label) || /35\s*[-~至]\s*44岁?/.test(label)) && result.fans_35_44_ratio === undefined) result.fans_35_44_ratio = item.ratio;
+      if ((/^>\s*44$/.test(label) || /44岁以上|45/.test(label)) && result.fans_44_plus_ratio === undefined) result.fans_44_plus_ratio = item.ratio;
     }
     result.audience_age_distribution = { segments: ageSegments, dominant: ageSegments.slice().sort((a, b) => b.ratio - a.ratio)[0], source: "detail_api" };
   }
@@ -1645,7 +3107,7 @@ function mergeDetailApiCache(detail, apiCache) {
     result.fans_35_plus_ratio = Math.min((Number(result.fans_35_44_ratio) || 0) + (Number(result.fans_44_plus_ratio) || 0), 1);
   }
 
-  const regionSegments = profileDistributionItems(firstDefined(fansProfile.provinces, fansProfile.regions, fansProfile.citys, fansProfile.cities), ["name", "label", "province"], ["percent", "ratio", "value"]).slice(0, 10);
+  const regionSegments = profileDistributionItems(firstDefined(fansProfile.provinces, fansProfile.regions), ["name", "label", "province"], ["percent", "ratio", "value"]).slice(0, 10);
   if (regionSegments.length) {
     result.audience_region_distribution = {
       raw_text: regionSegments.slice(0, 5).map((item) => `${item.label}(${percentText(item.ratio)})`).join("、"),
@@ -1653,6 +3115,16 @@ function mergeDetailApiCache(detail, apiCache) {
       top_regions: regionSegments,
       dominant: regionSegments[0],
       scope: "province"
+    };
+  }
+  const citySegments = profileDistributionItems(firstDefined(fansProfile.cities, fansProfile.citys), ["name", "label", "city"], ["percent", "ratio", "value"]).slice(0, 10);
+  if (citySegments.length) {
+    result.audience_city_distribution = {
+      raw_text: citySegments.slice(0, 5).map((item) => `${item.label}(${percentText(item.ratio)})`).join("、"),
+      source: "detail_api",
+      top_cities: citySegments,
+      dominant: citySegments[0],
+      scope: "city"
     };
   }
 
@@ -1669,8 +3141,17 @@ function mergeDetailApiCache(detail, apiCache) {
   }
 
   const interests = firstDefined(fansProfile.interests, fansProfile.interestTags, fansProfile.contentInterests);
+  const interestSegments = profileDistributionItems(interests, ["name", "label", "tag", "contentTag"], ["percent", "ratio", "value"]).slice(0, 10);
+  if (interestSegments.length) {
+    result.audience_interest_distribution = {
+      raw_text: interestSegments.slice(0, 5).map((item) => `${item.label}(${percentText(item.ratio)})`).join("、"),
+      source: "detail_api",
+      top_interests: interestSegments,
+      dominant: interestSegments[0]
+    };
+  }
   if (Array.isArray(interests) && !result.topic_point) {
-    const labels = interests.map((item) => cleanJsonText(typeof item === "object" ? firstDefined(item.name, item.label, item.tag) : item)).filter(Boolean);
+    const labels = interests.map((item) => cleanJsonText(typeof item === "object" ? firstDefined(item.name, item.label, item.tag, item.contentTag) : item)).filter(Boolean);
     if (labels.length) result.topic_point = labels.slice(0, 5).join("、");
   }
 
@@ -1680,10 +3161,22 @@ function mergeDetailApiCache(detail, apiCache) {
   note.exposure_median = firstDefined(note.exposure_median, dailyRate.impMedian, dailySummary.mAccumImpNum);
   note.read_median = firstDefined(note.read_median, dailyRate.readMedian, dailySummary.readMedian);
   note.interaction_median = firstDefined(note.interaction_median, dailyRate.interactionMedian, dailySummary.mEngagementNum);
-  note.interaction_rate = firstDefined(note.interaction_rate, ratioFromApiValue(dailyRate.interactionRate));
-  note.video_completion_rate = firstDefined(note.video_completion_rate, ratioFromApiValue(dailyRate.videoFullViewRate));
-  note.thousand_like_note_ratio = firstDefined(note.thousand_like_note_ratio, ratioFromApiValue(dailyRate.thousandLikePercent));
-  note.hundred_like_note_ratio = firstDefined(note.hundred_like_note_ratio, ratioFromApiValue(dailyRate.hundredLikePercent));
+  note.interaction_rate = firstDefined(note.interaction_rate, ratioFromApiValue(firstDefined(dailyRate.interactionRate, dailyRate.engagementRate, dailyRate.engageRate)));
+  note.video_completion_rate = firstDefined(
+    note.video_completion_rate,
+    ratioFromApiValue(firstDefined(dailyRate.videoFullViewRate, dailyRate.videoFullViewRate30, dailyRate.videoFinishRate, dailyRate.video_completion_rate, dailyRate.videoCompleteRate))
+  );
+  note.thousand_like_note_ratio = firstDefined(note.thousand_like_note_ratio, ratioFromApiValue(firstDefined(dailyRate.thousandLikePercent, dailyRate.thousandLikePercent30)));
+  note.hundred_like_note_ratio = firstDefined(note.hundred_like_note_ratio, ratioFromApiValue(firstDefined(dailyRate.hundredLikePercent, dailyRate.hundredLikePercent30)));
+  note.like_median = firstDefined(note.like_median, dailyRate.likeMedian, dailyRate.medianLikeCount, dailyRate.likeMidNum);
+  note.collect_median = firstDefined(note.collect_median, dailyRate.collectMedian, dailyRate.medianCollectCount, dailyRate.collectMidNum);
+  note.comment_median = firstDefined(note.comment_median, dailyRate.commentMedian, dailyRate.medianCommentCount, dailyRate.commentMidNum);
+  note.share_median = firstDefined(note.share_median, dailyRate.shareMedian, dailyRate.medianShareCount, dailyRate.shareMidNum);
+  note.follow_median = firstDefined(note.follow_median, dailyRate.mFollowCnt, dailyRate.mfollowCnt);
+  note.picture_3s_read_rate = firstDefined(
+    note.picture_3s_read_rate,
+    ratioFromApiValue(firstDefined(dailyRate.picture3sViewRate, dailyRate.picture3sViewRate30, dailyRate.picture3sReadRate, dailyRate.pictureThreeSecondReadRate, dailyRate.pic3sReadRate, dailyRate.picture_3s_read_rate))
+  );
 
   raw.fan_analysis = fan;
   raw.note_performance = note;
@@ -1731,35 +3224,64 @@ function buildDetailSummary(detail, captures = {}) {
   };
 }
 
+function hasUsableFastDetailData(detail) {
+  const summary = buildDetailSummary(detail);
+  if (!summary.has_basic_profile) return false;
+  return [
+    summary.has_note_performance,
+    summary.has_fan_analysis,
+    summary.has_region_distribution,
+    summary.has_device_distribution,
+    summary.has_service_performance,
+    summary.has_note_cases
+  ].some(Boolean);
+}
+
 function detailValuesForSheet(detail, captures, status, note = "") {
   const raw = detail?.raw_payload && typeof detail.raw_payload === "object" ? detail.raw_payload : {};
   const summary = buildDetailSummary(detail, captures);
+  const ageRatios = ageRatiosFromDetailAndCaptures(detail, captures);
   return {
     "详情补采状态": status,
     "详情补采时间": nowLocalText(),
     "详情完整度": `${summary.module_count}个模块 / 笔记${summary.note_case_count}条`,
     "详情API捕获摘要": jsonText(raw.detail_api_capture_summary || {}),
+    "小红书号": valueOrRaw(detail, "xiaohongshu_id") || fallbackRedIdValue(detail),
     "个人简介": valueOrRaw(detail, "personal_intro"),
     "博主优势": valueOrRaw(detail, "blogger_advantage"),
     "粉丝画像文本": captures.audience?.text || "",
     "笔记数据文本": captures.overview?.text || "",
+    "中位点赞量": valueOrRaw(detail, "like_median"),
+    "中位收藏量": valueOrRaw(detail, "collect_median"),
+    "中位评论量": valueOrRaw(detail, "comment_median"),
+    "中位分享量": valueOrRaw(detail, "share_median"),
+    "中位关注量": valueOrRaw(detail, "follow_median"),
+    "互动率": percentText(valueOrRaw(detail, "interaction_rate")),
+    "完播率": percentText(valueOrRaw(detail, "video_completion_rate")),
+    "视频完播率": percentText(valueOrRaw(detail, "video_completion_rate")),
+    "图文3秒阅读率": percentText(valueOrRaw(detail, "picture_3s_read_rate")),
     "女性粉丝占比": percentText(valueOrRaw(detail, "female_fans_ratio")),
     "男性粉丝占比": percentText(valueOrRaw(detail, "male_fans_ratio")),
-    "18-24粉丝占比": percentText(valueOrRaw(detail, "fans_18_24_ratio")),
-    "25-34粉丝占比": percentText(valueOrRaw(detail, "fans_25_34_ratio")),
-    "35-44粉丝占比": percentText(valueOrRaw(detail, "fans_35_44_ratio")),
-    "44岁以上粉丝占比": percentText(valueOrRaw(detail, "fans_44_plus_ratio")),
-    "35岁以上粉丝占比": percentText(valueOrRaw(detail, "fans_35_plus_ratio")),
+    "所属机构": valueOrRaw(detail, "organization_name"),
+    "<18粉丝占比": percentText(ageRatios.fans_under_18_ratio),
+    "18-24粉丝占比": percentText(ageRatios.fans_18_24_ratio),
+    "25-34粉丝占比": percentText(ageRatios.fans_25_34_ratio),
+    "35-44粉丝占比": percentText(ageRatios.fans_35_44_ratio),
+    "44岁以上粉丝占比": percentText(ageRatios.fans_44_plus_ratio),
+    "35岁以上粉丝占比": percentText(ageRatios.fans_35_plus_ratio),
     "活跃粉丝占比": percentText(valueOrRaw(detail, "active_fans_ratio")),
     "阅读粉丝占比": percentText(valueOrRaw(detail, "read_fans_ratio")),
     "互动粉丝占比": percentText(valueOrRaw(detail, "interaction_fans_ratio")),
     "下单粉丝占比": percentText(valueOrRaw(detail, "order_fans_ratio")),
     "粉丝增长率": percentText(valueOrRaw(detail, "fans_growth_ratio")),
+    "粉丝量变化幅度": percentText(valueOrRaw(detail, "fans_growth_ratio")),
     "粉丝性别分布": jsonText(valueOrRaw(detail, "audience_gender_distribution")),
     "粉丝年龄分布": jsonText(valueOrRaw(detail, "audience_age_distribution")),
     "粉丝地域分布": jsonText(valueOrRaw(detail, "audience_region_distribution")),
+    "粉丝城市分布": jsonText(valueOrRaw(detail, "audience_city_distribution")),
     "用户设备分布": jsonText(valueOrRaw(detail, "audience_device_distribution")),
     "用户兴趣": valueOrRaw(detail, "topic_point"),
+    "用户兴趣分布": jsonText(valueOrRaw(detail, "audience_interest_distribution")),
     "近7天活跃天数": valueOrRaw(detail, "active_days_7d"),
     "近期笔记JSON": jsonText(raw.note_cases || raw.recent_notes || raw.recent_note_briefs || []),
     "详情原始JSON": jsonText({ ...raw, detail_collection_summary: summary }),
@@ -1784,8 +3306,12 @@ async function sleepUntilStoppedOrTimeout(ms) {
   }
 }
 
-async function waitAfterDetailRequest() {
-  await sleep(randomInt(DETAIL_REQUEST_DELAY_MIN_MS, DETAIL_REQUEST_DELAY_MAX_MS));
+async function waitAfterDetailRequest(options = {}) {
+  const fastMode = Boolean(options.directExportFastMode);
+  await sleep(randomInt(
+    fastMode ? DETAIL_FAST_REQUEST_DELAY_MIN_MS : DETAIL_REQUEST_DELAY_MIN_MS,
+    fastMode ? DETAIL_FAST_REQUEST_DELAY_MAX_MS : DETAIL_REQUEST_DELAY_MAX_MS
+  ));
 }
 
 function isDetailRateLimitError(error) {
@@ -1794,12 +3320,21 @@ function isDetailRateLimitError(error) {
   return /频繁|限频|稍后再试|人机验证|rate.?limit|too many|429/i.test(message);
 }
 
-async function collectDetailPayloadWithCooldown(row, index) {
+async function collectDetailPayloadWithCooldown(row, index, options = {}) {
   let retries = 0;
   while (!detailStopRequested) {
     try {
-      return await collectDetailPayload(row, index);
+      const fastPayload = await collectDetailPayloadFast(row, index, options).catch((error) => {
+        if (options.directExportFastMode) throw error;
+        return null;
+      });
+      if (fastPayload?.ok) return fastPayload;
+      if (options.directExportFastMode) throw new Error("极速详情接口未返回有效数据");
+      const reusablePayload = await collectDetailPayloadWithReusableTab(row, index, options).catch(() => null);
+      if (reusablePayload?.ok) return reusablePayload;
+      return await collectDetailPayload(row, index, options);
     } catch (error) {
+      if (options.directExportFastMode) throw error;
       const rateLimited = isDetailRateLimitError(error);
       if (!rateLimited || retries >= DETAIL_RATE_LIMIT_MAX_RETRIES) {
         if (rateLimited && error && typeof error === "object") error.paused = true;
@@ -1819,7 +3354,7 @@ async function collectDetailPayloadWithCooldown(row, index) {
       );
       await sleepUntilStoppedOrTimeout(DETAIL_RATE_LIMIT_COOLDOWN_MS);
     } finally {
-      await waitAfterDetailRequest();
+      await waitAfterDetailRequest(options);
     }
   }
   throw new Error("详情补足已停止。");
@@ -1837,6 +3372,12 @@ async function runDetailBackfillPool(items, handler, concurrency = DETAIL_BACKFI
     }
   }
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+}
+
+function detailBackfillConcurrencyForOptions(options = {}) {
+  if (options.directExportFastMode) return DETAIL_BACKFILL_CONCURRENCY;
+  if (DETAIL_FAST_API_MODE && !shouldCaptureFansScreenshot(options) && !shouldCaptureNoteScreenshot(options)) return 1;
+  return DETAIL_BACKFILL_CONCURRENCY;
 }
 
 async function withDetailCaptureLock(task) {
@@ -1997,6 +3538,53 @@ async function capturePreparedTab(tab, kind, row, index) {
   });
 }
 
+function shouldCaptureFansScreenshot(options = {}) {
+  return Boolean(options.detailCaptureFansScreenshot);
+}
+
+function shouldCaptureNoteScreenshot(options = {}) {
+  return Boolean(options.detailCaptureNoteScreenshot);
+}
+
+function skippedAudienceCapture() {
+  return {
+    ok: true,
+    kind: "audience",
+    found: false,
+    text: "",
+    screenshot: "",
+    imageName: "",
+    screenshotSkipped: true,
+    skippedByOption: true
+  };
+}
+
+function skippedOverviewCapture() {
+  return {
+    ok: true,
+    kind: "overview",
+    found: false,
+    text: "",
+    screenshot: "",
+    imageName: "",
+    screenshotSkipped: true,
+    skippedByOption: true
+  };
+}
+
+function isFansScreenshotEnabledFromCaptures(captures = {}) {
+  return !captures.audience?.skippedByOption;
+}
+
+function isNoteScreenshotEnabledFromCaptures(captures = {}) {
+  return !captures.overview?.skippedByOption;
+}
+
+function detailStatusByCapture(captures = {}, successStatus = "已补足", missingAudienceStatus = "已补足-未确认粉丝画像") {
+  if (!isFansScreenshotEnabledFromCaptures(captures)) return successStatus;
+  return captures.audience?.found ? successStatus : missingAudienceStatus;
+}
+
 function isDetailAuthError(error) {
   if (error?.authRequired || error?.requiresUserAction) return true;
   const message = String(error?.message || error || "");
@@ -2035,7 +3623,426 @@ async function readDetailApiCache(tabId) {
   return result?.result || {};
 }
 
-async function collectDetailPayload(row, index) {
+async function readReusableDetailApiCache(tabId) {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async () => {
+      function clone(value) {
+        try {
+          return JSON.parse(JSON.stringify(value || {}));
+        } catch {
+          return {};
+        }
+      }
+      function ready(state) {
+        const cache = state?.cache || {};
+        return Boolean(
+          cache.blogger_profile
+          && cache.fans_summary
+          && cache.fans_profile
+          && cache.notes_rate?.daily
+          && cache.data_summary?.daily
+        );
+      }
+      async function sleep(ms) {
+        await new Promise((resolve) => setTimeout(resolve, ms));
+      }
+      for (let index = 0; index < 40; index += 1) {
+        const state = window.__PGY_DETAIL_API_CACHE__;
+        if (ready(state)) return { ok: true, ...clone(state) };
+        await sleep(250);
+      }
+      const state = clone(window.__PGY_DETAIL_API_CACHE__ || {});
+      return { ok: ready(state), ...state };
+    }
+  });
+  return result?.result || { ok: false, cache: {}, responses: [] };
+}
+
+async function prefetchDetailBusinessData(tabId, business = "cooperation") {
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (targetBusiness) => {
+      if (typeof window.__PGY_DETAIL_API_PREFETCH__ !== "function") {
+        return { ok: false, skipped: true, message: "详情页未捕获到可复用的合作笔记请求模板" };
+      }
+      return window.__PGY_DETAIL_API_PREFETCH__(targetBusiness);
+    },
+    args: [business]
+  });
+  return result?.result || { ok: false, skipped: true };
+}
+
+async function findPgyContextTab() {
+  const tabs = await chrome.tabs.query({ url: "https://pgy.xiaohongshu.com/*" }).catch(() => []);
+  return tabs.find((tab) => tab?.id && !String(tab.url || "").includes("/solar/pre-trade/blogger-detail/"))
+    || tabs.find((tab) => tab?.id)
+    || null;
+}
+
+function fastDetailApiUrls(userId) {
+  const encoded = encodeURIComponent(userId);
+  const requests = [
+    { kind: "blogger_profile", url: `/api/solar/cooperator/user/blogger/${encoded}` },
+    { kind: "fans_summary", url: `/api/solar/kol/data_v3/fans_summary?userId=${encoded}` },
+    { kind: "fans_profile", url: `/api/solar/kol/data/${encoded}/fans_profile` },
+    { kind: "notes_rate", business: "daily", url: `/api/solar/kol/data_v3/notes_rate?userId=${encoded}&business=0&noteType=3&dateType=1&advertiseSwitch=1` },
+    { kind: "notes_rate", business: "cooperation", url: `/api/solar/kol/data_v3/notes_rate?userId=${encoded}&business=1&noteType=3&dateType=1&advertiseSwitch=1` },
+    { kind: "data_summary", business: "daily", url: `/api/pgy/kol/data/data_summary?userId=${encoded}&business=0` },
+    { kind: "data_summary", business: "cooperation", url: `/api/pgy/kol/data/data_summary?userId=${encoded}&business=1` }
+  ];
+  for (const business of ["daily", "cooperation"]) {
+    for (let pageNumber = 1; pageNumber <= 3; pageNumber += 1) {
+      const businessValue = business === "cooperation" ? 1 : 0;
+      requests.push({
+        kind: "notes_detail",
+        business,
+        noteType: 4,
+        pageNumber,
+        optional: pageNumber > 1,
+        url: `/api/solar/kol/data_v2/notes_detail?advertiseSwitch=1&orderType=1&pageNumber=${pageNumber}&pageSize=8&userId=${encoded}&noteType=4&business=${businessValue}&isThirdPlatform=0`
+      });
+    }
+  }
+  return requests;
+}
+
+async function fetchFastDetailApiCacheFromTab(tabId, userId) {
+  const requests = fastDetailApiUrls(userId);
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (requestList) => {
+      function safeData(payload) {
+        if (payload && typeof payload === "object" && payload.data && typeof payload.data === "object") return payload.data;
+        return payload && typeof payload === "object" ? payload : {};
+      }
+      const cache = {};
+      const responses = await Promise.all(requestList.map(async (request) => {
+        const absoluteUrl = new URL(request.url, location.origin).toString();
+        const response = await fetch(absoluteUrl, { credentials: "include" });
+        const text = await response.text();
+        let payload = {};
+        try {
+          payload = JSON.parse(text);
+        } catch {
+          payload = {};
+        }
+        if (!response.ok || (payload && payload.success === false)) {
+          if (request.optional) {
+            return {
+              kind: request.kind,
+              url: absoluteUrl,
+              status: response.status,
+              skipped: true,
+              message: payload?.msg || payload?.message || text.slice(0, 120),
+              captured_at: new Date().toISOString(),
+              fast_api: true
+            };
+          }
+          return {
+            kind: request.kind,
+            url: absoluteUrl,
+            status: response.status,
+            failed: true,
+            message: payload?.msg || payload?.message || text.slice(0, 120),
+            captured_at: new Date().toISOString(),
+            fast_api: true
+          };
+        }
+        const data = safeData(payload);
+        return { kind: request.kind, url: absoluteUrl, status: response.status, data, captured_at: new Date().toISOString(), fast_api: true, request };
+      }));
+      for (const response of responses) {
+        if (response.skipped || response.failed) continue;
+        const request = response.request || {};
+        const data = response.data || {};
+        if (request.kind === "notes_rate" || request.kind === "data_summary") {
+          const business = request.business || "daily";
+          cache[request.kind] = cache[request.kind] || {};
+          cache[request.kind][business] = data;
+        } else if (request.kind === "notes_detail") {
+          const business = request.business || "daily";
+          const noteType = request.noteType || 0;
+          const pageNumber = request.pageNumber || 1;
+          cache.notes_detail = cache.notes_detail || {};
+          cache.notes_detail[business] = cache.notes_detail[business] || {};
+          cache.notes_detail[business][noteType] = cache.notes_detail[business][noteType] || {};
+          cache.notes_detail[business][noteType][pageNumber] = data;
+        } else {
+          cache[request.kind] = data;
+        }
+      }
+      return {
+        ok: true,
+        cache,
+        responses: responses.map(({ request, ...response }) => response),
+        requests: requestList.map((request) => ({ ...request, fast_api: true, captured_at: new Date().toISOString() }))
+      };
+    },
+    args: [requests]
+  });
+  return result?.result || { ok: false, cache: {}, responses: [] };
+}
+
+function priceTextFromPgyValue(value) {
+  const number = numericValue(value);
+  if (typeof number !== "number" || !Number.isFinite(number) || number <= 0) return "";
+  const yuan = number >= 100000 ? number / 100 : number;
+  return Math.round(yuan).toLocaleString("zh-CN");
+}
+
+function countTextFromPgyValue(value) {
+  const number = numericValue(value);
+  if (typeof number !== "number" || !Number.isFinite(number) || number <= 0) return "";
+  if (number >= 10000) return `${Math.round((number / 10000) * 10) / 10}万`;
+  return Math.round(number).toLocaleString("zh-CN");
+}
+
+function preFavoriteCategoryTags(profile = {}) {
+  const tags = [];
+  const addTag = (value) => {
+    const text = cleanJsonText(value);
+    if (!text) return;
+    for (const tag of text.split(/[、,，/|｜;；]+/).map((item) => item.trim()).filter(Boolean)) {
+      if (!tags.includes(tag)) tags.push(tag);
+    }
+  };
+  const addCategory = (value) => {
+    if (Array.isArray(value)) {
+      value.forEach(addCategory);
+      return;
+    }
+    if (value && typeof value === "object") {
+      const direct = firstDefined(value.taxonomy1Tag, value.categoryName, value.name, value.label, value.contentTag);
+      if (direct) addTag(direct);
+      else addCategory(firstDefined(value.children, value.tags));
+      return;
+    }
+    addTag(value);
+  };
+  addCategory(profile.contentTags);
+  addCategory(profile.top2CategoryList);
+  if (!tags.length) addCategory(firstDefined(profile.categoryName, profile.category));
+  return tags.slice(0, 5);
+}
+
+function preFavoritePatchFromApiCache(userId, apiCache) {
+  const profile = apiCache?.cache?.blogger_profile || {};
+  const redId = cleanJsonText(firstDefined(profile.redId, profile.red_id, profile.redID, profile.redBookId, profile.redbookId, profile.red_book_id, profile.xiaohongshuId, profile.xiaohongshu_id));
+  const categoryTags = preFavoriteCategoryTags(profile);
+  const patch = {
+    userId,
+    categoryTags,
+    categorySource: "pgy_profile",
+    quoteStatus: "报价已获取",
+    quoteFetchedAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  const name = cleanJsonText(firstDefined(profile.name, profile.nickName, profile.nickname));
+  if (name) patch.name = name;
+  if (redId) patch.redId = redId;
+  const location = cleanJsonText(firstDefined(profile.location, profile.ipLocation, profile.ip_city, profile.city));
+  if (location) patch.location = location;
+  const followersText = countTextFromPgyValue(firstDefined(profile.fansNum, profile.fansCount, profile.fans_count, profile.followerCount, profile.followersCount, profile.followers));
+  if (followersText) patch.followersText = followersText;
+  const likesText = countTextFromPgyValue(firstDefined(profile.likeCollectCountInfo, profile.likedCollectedCount, profile.likeCollectCount, profile.likeAndCollectCount, profile.likedCount));
+  if (likesText) patch.likesText = likesText;
+  const picturePriceText = priceTextFromPgyValue(firstDefined(profile.picturePrice, profile.price, profile.quotePrice, profile.imageQuotePrice, profile.picPrice));
+  if (picturePriceText) patch.picturePriceText = picturePriceText;
+  const videoPriceText = priceTextFromPgyValue(firstDefined(profile.videoPrice, profile.videoQuotePrice));
+  if (videoPriceText) patch.videoPriceText = videoPriceText;
+  if (!picturePriceText && !videoPriceText) patch.quoteStatus = "报价未返回";
+  return patch;
+}
+
+async function enrichPreFavoriteQuote({ userId }) {
+  const cleanUserId = cleanPgyUserId(userId);
+  if (!cleanUserId) throw new Error("没有识别到达人 ID。");
+  let tab = await findPgyContextTab();
+  let createdTabId = 0;
+  if (!tab?.id) {
+    tab = await chrome.tabs.create({ url: detailUrl(cleanUserId), active: false });
+    createdTabId = tab.id || 0;
+    if (createdTabId) await waitForTabComplete(createdTabId, 20000).catch(() => null);
+  }
+  if (!tab?.id) throw new Error("无法打开蒲公英上下文页面。");
+  let apiCache = null;
+  try {
+    apiCache = await fetchFastDetailApiCacheFromTab(tab.id, cleanUserId);
+  } finally {
+    if (createdTabId) chrome.tabs.remove(createdTabId).catch(() => null);
+  }
+  if (!apiCache?.ok) throw new Error(apiCache?.message || "蒲公英报价接口读取失败，请确认已登录蒲公英。");
+  const patch = preFavoritePatchFromApiCache(cleanUserId, apiCache);
+  const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+  const favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
+  const next = favorites.map((item) => item?.userId === cleanUserId ? { ...item, ...patch } : item);
+  await chrome.storage.local.set({ pgyPreFavorites: next });
+  return { ok: true, patch };
+}
+
+async function detailDomCacheForUser(userId) {
+  if (!userId) return {};
+  const key = `pgy_detail_dom_${userId}`;
+  const stored = await chrome.storage.local.get(key).catch(() => ({}));
+  return stored?.[key] && typeof stored[key] === "object" ? stored[key] : {};
+}
+
+async function saveDetailDomCache(detail) {
+  const userId = extractPgyUserId({
+    creator_id: detail?.pgy_blogger_id ? `pgy-api:${detail.pgy_blogger_id}` : "",
+    pgy_url: detail?.pgy_url || detail?.detail_url || ""
+  });
+  if (!userId) return;
+  const patch = {};
+  const organizationName = valueOrRaw(detail, "organization_name");
+  if (organizationName) patch.organization_name = organizationName;
+  if (!Object.keys(patch).length) return;
+  await chrome.storage.local.set({ [`pgy_detail_dom_${userId}`]: { ...patch, cached_at: nowLocalText() } }).catch(() => null);
+}
+
+async function collectDetailPayloadFast(row, index, options = {}) {
+  if (!DETAIL_FAST_API_MODE) return null;
+  if (shouldCaptureFansScreenshot(options) || shouldCaptureNoteScreenshot(options)) return null;
+  const userId = extractPgyUserId(row);
+  if (!userId) return null;
+  const tab = await findPgyContextTab();
+  if (!tab?.id) return null;
+  const apiCache = await fetchFastDetailApiCacheFromTab(tab.id, userId);
+  if (!apiCache?.ok) return null;
+  const url = detailUrlFromRow(row) || detailUrl(userId);
+  const textDetail = {
+    pgy_url: url,
+    pgy_blogger_id: userId,
+    profile_url: profileUrl(userId),
+    ...(await detailDomCacheForUser(userId)),
+    raw_payload: {
+      detail_collection_source: "fast_detail_api",
+      collected_at: nowLocalText()
+    }
+  };
+  const detail = mergeDetailApiCache(textDetail, apiCache);
+  if (!hasUsableFastDetailData(detail)) return null;
+  await saveDetailDomCache(detail);
+  return {
+    ok: true,
+    fastApi: true,
+    url,
+    title: "",
+    detail,
+    captures: { audience: skippedAudienceCapture(), overview: skippedOverviewCapture() },
+    detailUrl: url,
+    apiCacheSummary: detail.raw_payload?.detail_api_capture_summary || {},
+    imageName: `pgy-detail-${userId || index + 1}.png`
+  };
+}
+
+async function getReusableDetailTab(url) {
+  if (detailFastTabId) {
+    const existing = await chrome.tabs.get(detailFastTabId).catch(() => null);
+    if (existing?.id) return existing;
+    detailFastTabId = 0;
+  }
+  const tab = await withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: !DETAIL_HEADLESS_MODE }));
+  detailFastTabId = tab.id || 0;
+  return tab;
+}
+
+async function closeReusableDetailTab() {
+  if (!detailFastTabId) return;
+  const tabId = detailFastTabId;
+  detailFastTabId = 0;
+  await chrome.tabs.remove(tabId).catch(() => null);
+}
+
+async function collectDetailPayloadWithReusableTab(row, index, options = {}) {
+  if (!DETAIL_FAST_API_MODE) return null;
+  if (shouldCaptureFansScreenshot(options) || shouldCaptureNoteScreenshot(options)) return null;
+  const url = detailUrlFromRow(row);
+  if (!url) return null;
+  const userId = extractPgyUserId(row);
+  if (!userId) return null;
+  const tab = await getReusableDetailTab(url);
+  if (!tab?.id) return null;
+  const currentUrl = String(tab.url || "");
+  if (!currentUrl.includes(url)) {
+    await chrome.tabs.update(tab.id, { url, active: !DETAIL_HEADLESS_MODE });
+  }
+  await waitForTabComplete(tab.id);
+  const apiCache = await readReusableDetailApiCache(tab.id);
+  if (!apiCache?.ok && !apiCache?.responses?.length) return null;
+  const existingOrganization = valueForCanonicalField(row, "所属机构");
+  const textDetail = {
+    pgy_url: url,
+    pgy_blogger_id: userId,
+    profile_url: profileUrl(userId),
+    ...(existingOrganization ? { organization_name: existingOrganization } : {}),
+    raw_payload: {
+      detail_collection_source: "fast_detail_page_api",
+      collected_at: nowLocalText()
+    }
+  };
+  const detail = mergeDetailApiCache(textDetail, apiCache);
+  if (!hasUsableFastDetailData(detail)) return null;
+  return {
+    ok: true,
+    fastApi: true,
+    url,
+    title: "",
+    detail,
+    captures: { audience: skippedAudienceCapture(), overview: skippedOverviewCapture() },
+    detailUrl: url,
+    apiCacheSummary: detail.raw_payload?.detail_api_capture_summary || {},
+    imageName: `pgy-detail-${userId || index + 1}.png`
+  };
+}
+
+async function collectDetailPayloadFromTab(tab, row, index, url, options = {}) {
+  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["detail-capture.js"] });
+  const result = await chrome.tabs.sendMessage(tab.id, { type: "PGY_COLLECT_DETAIL" });
+  if (!result?.ok) {
+    const error = new Error(result?.message || "详情页采集失败");
+    error.paused = Boolean(result?.paused);
+    error.authRequired = Boolean(result?.authRequired);
+    throw error;
+  }
+  const prefetch = await prefetchDetailBusinessData(tab.id, "cooperation").catch((error) => ({
+    ok: false,
+    message: error?.message || String(error)
+  }));
+  const apiCache = await readDetailApiCache(tab.id);
+  const audience = shouldCaptureFansScreenshot(options)
+    ? await capturePreparedTab(tab, "audience", row, index)
+    : skippedAudienceCapture();
+  const overview = shouldCaptureNoteScreenshot(options)
+    ? await capturePreparedTab(tab, "overview", row, index)
+    : skippedOverviewCapture();
+  const textDetail = {
+    ...(result.detail || {}),
+    pgy_url: result.url || url,
+    raw_payload: {
+      ...((result.detail || {}).raw_payload || {}),
+      detail_collection_source: "browser_extension",
+      cooperation_prefetch: prefetch,
+      collected_at: result.collectedAt || nowLocalText()
+    }
+  };
+  const detail = mergeDetailApiCache(textDetail, apiCache);
+  return {
+    ...result,
+    apiCacheSummary: detail.raw_payload?.detail_api_capture_summary || {},
+    cooperationPrefetch: prefetch,
+    detail,
+    captures: { audience, overview },
+    detailUrl: url || result.url || "",
+    imageName: `pgy-detail-${extractPgyUserId(row) || index + 1}.png`
+  };
+}
+
+async function collectDetailPayload(row, index, options = {}) {
   const url = detailUrlFromRow(row);
   if (!url) throw new Error("该行缺少蒲公英达人链接或达人ID。");
   const currentTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
@@ -2044,35 +4051,7 @@ async function collectDetailPayload(row, index) {
   let keepTabOpen = false;
   try {
     await waitForTabComplete(tab.id);
-    await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["detail-capture.js"] });
-    const result = await chrome.tabs.sendMessage(tab.id, { type: "PGY_COLLECT_DETAIL" });
-    if (!result?.ok) {
-      const error = new Error(result?.message || "详情页采集失败");
-      error.paused = Boolean(result?.paused);
-      error.authRequired = Boolean(result?.authRequired);
-      throw error;
-    }
-    const apiCache = await readDetailApiCache(tab.id);
-    const audience = await capturePreparedTab(tab, "audience", row, index);
-    const overview = await capturePreparedTab(tab, "overview", row, index);
-    const textDetail = {
-      ...(result.detail || {}),
-      pgy_url: result.url || url,
-      raw_payload: {
-        ...((result.detail || {}).raw_payload || {}),
-        detail_collection_source: "browser_extension",
-        collected_at: result.collectedAt || nowLocalText()
-      }
-    };
-    const detail = mergeDetailApiCache(textDetail, apiCache);
-    return {
-      ...result,
-      apiCacheSummary: detail.raw_payload?.detail_api_capture_summary || {},
-      detail,
-      captures: { audience, overview },
-      detailUrl: url,
-      imageName: `pgy-detail-${extractPgyUserId(row) || index + 1}.png`
-    };
+    return await collectDetailPayloadFromTab(tab, row, index, url, options);
   } catch (error) {
     if (isDetailAuthError(error)) {
       keepTabOpen = true;
@@ -2097,6 +4076,308 @@ async function collectDetailPayload(row, index) {
   }
 }
 
+function rowFromDetailUrl(url) {
+  const cleanUrl = String(url || "");
+  if (!cleanUrl.includes("/solar/pre-trade/blogger-detail/")) {
+    throw new Error("请先打开蒲公英达人详情页再点击收藏。");
+  }
+  const userId = (cleanUrl.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+  return {
+    "达人ID": userId ? `pgy-api:${userId}` : "",
+    "蒲公英链接": cleanUrl,
+    pgy_url: cleanUrl
+  };
+}
+
+async function collectDetailPayloadFromBackgroundTab(url, index = 0, options = {}) {
+  const row = rowFromDetailUrl(url);
+  const tab = await withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: false }));
+  try {
+    await waitForTabComplete(tab.id);
+    return await collectDetailPayloadFromTab(tab, row, index, url, options);
+  } catch (error) {
+    if (isDetailAuthError(error)) {
+      error.requiresUserAction = true;
+      error.paused = true;
+      notifyDetailBackfill(
+        "收藏详情采集需要登录/授权",
+        "后台详情页采集失败，请在蒲公英完成登录或授权后再重新收藏。",
+        { requireInteraction: true }
+      );
+    }
+    throw error;
+  } finally {
+    await chrome.tabs.remove(tab.id).catch(() => null);
+  }
+}
+
+async function collectCurrentDetailPayload(tab, index = 0, options = {}) {
+  if (!tab?.id) throw new Error("无法定位当前达人详情页。");
+  const url = tab.url || "";
+  rowFromDetailUrl(url);
+  return collectDetailPayloadFromBackgroundTab(url, index, options);
+}
+
+function detailFavoriteOptions(options) {
+  return { ...(options || {}) };
+}
+
+function rowForDetailPayload(payload) {
+  const detail = payload.detail || {};
+  const userId = extractPgyUserId({
+    creator_id: detail.pgy_blogger_id ? `pgy-api:${detail.pgy_blogger_id}` : "",
+    pgy_url: payload.detailUrl || detail.pgy_url || ""
+  });
+  return normalizeExportRow({
+    ...(detail || {}),
+    creator_id: userId ? `pgy-api:${userId}` : detail.creator_id || "",
+    pgy_url: payload.detailUrl || detail.pgy_url || "",
+    profile_url: detail.profile_url || profileUrl(userId),
+    raw_payload: detail.raw_payload || {}
+  });
+}
+
+async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收藏") {
+  const sourceRow = rowForDetailPayload(payload);
+  const seedValues = {
+    ...sourceRow,
+    ...detailValuesForSheet(payload.detail, payload.captures || {}, actionStatus, payload.detailUrl || "")
+  };
+  const values = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+  const shape = effectiveSheetWidth(values)
+    ? existingOnlySheetShape(values)
+    : await (async () => {
+      await writeSheetHeader(sheet.token, sheet.spreadsheetToken, sheet.sheetId, [seedValues]);
+      return referenceExportShape();
+    })();
+  const latestValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+  const latestShape = detectSheetShape(latestValues);
+  const items = sheetRowsToShapeObjects(latestValues, latestShape);
+  const existing = items.find((item) => rowMatchKeys(item.row).some((key) => rowMatchKeys(sourceRow).includes(key)));
+  let rowNumber = existing?.rowNumber || 0;
+  let action = "updated";
+  if (!rowNumber) {
+    await appendMappedSheetRows(sheet.token, sheet.spreadsheetToken, sheet.sheetId, shape, [seedValues]);
+    const afterValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+    const afterShape = detectSheetShape(afterValues);
+    const afterItems = sheetRowsToShapeObjects(afterValues, afterShape);
+    rowNumber = afterItems.find((item) => rowMatchKeys(item.row).some((key) => rowMatchKeys(sourceRow).includes(key)))?.rowNumber || afterValues.length;
+    action = "appended";
+  }
+
+  const captures = payload.captures || {};
+  const valuesByField = {
+    ...canonicalBackfillValues(sourceRow, payload),
+    ...detailValuesForSheet(payload.detail, captures, detailStatusByCapture(captures, actionStatus, `${actionStatus}-未确认粉丝画像`), payload.detailUrl || "")
+  };
+  const targetValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+  const targetShape = existingOnlySheetShape(targetValues);
+  const rowLine = targetValues[rowNumber - 1] || [];
+  let writtenCells = 0;
+  const warnings = [];
+
+  for (const column of targetShape.columns) {
+    if (isFansImageColumn(column)) {
+      if (!isFansScreenshotEnabledFromCaptures(captures)) continue;
+      if (captures.audience?.screenshot) {
+        const imageResult = await writeSheetImageByColumnBestEffort(
+          sheet.token,
+          sheet.spreadsheetToken,
+          sheet.sheetId,
+          column.columnIndex,
+          rowNumber,
+          captures.audience.screenshot,
+          captures.audience.imageName
+        );
+        if (imageResult.ok) writtenCells += 1;
+        else warnings.push(`粉丝画像截图未写入：${imageResult.message}`);
+      }
+      continue;
+    }
+    if (isNoteImageColumn(column)) {
+      const usesImage = columnUsesImageTemplate(column, { line: rowLine });
+      if (usesImage && !isNoteScreenshotEnabledFromCaptures(captures)) continue;
+      if (usesImage && captures.overview?.screenshot) {
+        const imageResult = await writeSheetImageByColumnBestEffort(
+          sheet.token,
+          sheet.spreadsheetToken,
+          sheet.sheetId,
+          column.columnIndex,
+          rowNumber,
+          captures.overview.screenshot,
+          captures.overview.imageName
+        );
+        if (imageResult.ok) writtenCells += 1;
+        else warnings.push(`笔记数据截图未写入：${imageResult.message}`);
+      } else {
+        const value = readMetricValue(valuesByField);
+        if (value !== undefined && value !== null && value !== "") {
+          const cellResult = await writeSheetCellByColumnBestEffort(
+            sheet.token,
+            sheet.spreadsheetToken,
+            sheet.sheetId,
+            column.columnIndex,
+            rowNumber,
+            value,
+            column.fieldName || column.canonicalField
+          );
+          if (cellResult.ok) writtenCells += 1;
+          else warnings.push(cellResult.message);
+        }
+      }
+      continue;
+    }
+    if (!column.canonicalField) continue;
+    const value = valueForCanonicalField(valuesByField, column.canonicalField);
+    if (value === undefined || value === null || value === "") continue;
+    const cellResult = await writeSheetCellByColumnBestEffort(
+      sheet.token,
+      sheet.spreadsheetToken,
+      sheet.sheetId,
+      column.columnIndex,
+      rowNumber,
+      value,
+      column.fieldName || column.canonicalField
+    );
+    if (cellResult.ok) writtenCells += 1;
+    else warnings.push(cellResult.message);
+  }
+  return { ok: true, resourceType: "sheet", action, rowNumber, writtenCells, warnings };
+}
+
+async function appendDetailPayloadToBitable(target, payload) {
+  const tableId = await chooseBitableTable(target.token, target.parsed.token, target.options.detailFeishuSheetId || target.parsed.tableId || "");
+  await ensureBitableFieldNames(target.token, target.parsed.token, tableId, STANDARD_FIELDS);
+  const fieldsMeta = await ensureBitableDetailFields(target.token, target.parsed.token, tableId);
+  const sourceRow = rowForDetailPayload(payload);
+  const valuesByField = canonicalBackfillValues(sourceRow, payload);
+  const detailFields = await bitableDetailFieldsWithAttachments({
+    token: target.token,
+    appToken: target.parsed.token,
+    fieldsMeta,
+    valuesByField,
+    captures: payload.captures || {}
+  });
+  const fields = {
+    ...normalizeExportRow(sourceRow),
+    ...detailFields
+  };
+  const records = await readBitableRecords(target.token, target.parsed.token, tableId);
+  const existing = records.find((record) => rowMatchKeys(record.fields || {}).some((key) => rowMatchKeys(sourceRow).includes(key)));
+  if (existing) {
+    await updateBitableRecord(target.token, target.parsed.token, tableId, existing.record_id || existing.id, fields);
+    return { ok: true, resourceType: "bitable", action: "updated", tableId, recordId: existing.record_id || existing.id, writtenCells: Object.keys(fields).length };
+  }
+  const result = await appendBitableRecords(target.token, target.parsed.token, tableId, Object.keys(fields), [fields]);
+  return { ok: true, resourceType: "bitable", action: "appended", tableId, writtenCount: result.writtenCount };
+}
+
+async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
+  const saved = await chrome.storage.local.get({
+    feishuAppId: "",
+    feishuAppSecret: "",
+    feishuUrl: "",
+    feishuSheetId: "",
+    detailFeishuUrl: "",
+    detailFeishuSheetId: "",
+    detailTraverseAllSheets: false,
+    detailCaptureFansScreenshot: true,
+    detailCaptureNoteScreenshot: true
+  });
+  const mergedOptions = detailFavoriteOptions({ ...saved, ...(options || {}) });
+  const appId = mergedOptions.feishuAppId;
+  const appSecret = mergedOptions.feishuAppSecret;
+  const feishuUrl = mergedOptions.detailFeishuUrl;
+  if (!appId || !appSecret || !feishuUrl) throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
+  const payload = await collectCurrentDetailPayload(tab, 0, mergedOptions);
+  const token = await tenantToken(appId, appSecret);
+  const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
+  if (parsed.resourceType === "bitable") {
+    return appendDetailPayloadToBitable({ token, parsed, options: mergedOptions }, payload);
+  }
+  if (parsed.resourceType !== "sheet") throw new Error("收藏写回当前支持飞书电子表格或多维表格。");
+  const sheetId = await chooseSheet(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.sheetId || "");
+  return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
+}
+
+async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
+  if (!tab?.id) throw new Error("无法定位当前达人详情页。");
+  const url = tab.url || "";
+  rowFromDetailUrl(url);
+  const saved = await chrome.storage.local.get({
+    feishuAppId: "",
+    feishuAppSecret: "",
+    detailFeishuUrl: ""
+  });
+  const mergedOptions = { ...saved, ...(options || {}) };
+  if (!mergedOptions.feishuAppId || !mergedOptions.feishuAppSecret || !mergedOptions.detailFeishuUrl) {
+    throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
+  }
+  const userId = (url.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+  const task = favoriteCurrentDetailToFeishu({ tab: { id: tab.id, url }, options: mergedOptions })
+    .then((result) => {
+      notifyDetailBackfill(
+        "收藏写回完成",
+        `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
+      );
+      return result;
+    })
+    .catch((error) => {
+      notifyDetailBackfill(
+        "收藏写回失败",
+        shortErrorMessage(error),
+        { requireInteraction: true }
+      );
+      throw error;
+    });
+  task.catch(() => null);
+  return { ok: true, accepted: true, userId, detailUrl: url };
+}
+
+function shouldUseDetailCollection(options = {}) {
+  return options.collectionMode === "detail";
+}
+
+async function enrichRowsWithDetails({ rows, options = {}, limit = 0 }) {
+  if (!Array.isArray(rows) || !rows.length) return { ok: true, rows: [], completed: 0, failed: 0, total: 0 };
+  detailStopRequested = false;
+  const maxRows = Number(limit || rows.length);
+  const targetRows = rows.slice(0, Math.max(0, Math.min(maxRows, rows.length)));
+  const enrichedRows = rows.map((row) => normalizeExportRow(row));
+  let completed = 0;
+  let failed = 0;
+  const errorSamples = [];
+
+  try {
+    await runDetailBackfillPool(targetRows, async (row, index) => {
+      try {
+        const payload = await collectDetailPayloadWithCooldown(row, index, options);
+        enrichedRows[index] = {
+          ...normalizeExportRow(row),
+          ...canonicalBackfillValues(row, payload)
+        };
+        completed += 1;
+      } catch (error) {
+        failed += 1;
+        if (errorSamples.length < 5) errorSamples.push({ rowNumber: index + 1, message: shortErrorMessage(error) });
+        enrichedRows[index] = {
+          ...normalizeExportRow(row),
+          "详情补采状态": detailFailureStatus(error, "补采"),
+          "详情补采时间": nowLocalText(),
+          "详情补采备注": error?.message || String(error)
+        };
+        if (error?.paused || error?.requiresUserAction) detailStopRequested = true;
+      }
+    }, detailBackfillConcurrencyForOptions(options));
+  } finally {
+    await closeReusableDetailTab();
+  }
+
+  const stopped = Boolean(detailStopRequested);
+  detailStopRequested = false;
+  return { ok: true, rows: enrichedRows, completed, failed, stopped, total: targetRows.length, inputCount: rows.length, errorSamples };
+}
+
 async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
   if (!Array.isArray(rows) || !rows.length) throw new Error("请先导入达人表格。");
   detailStopRequested = false;
@@ -2108,7 +4389,8 @@ async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
   let failed = 0;
   let appended = 0;
 
-  await runDetailBackfillPool(targetRows, async (sourceRow, index) => {
+  try {
+    await runDetailBackfillPool(targetRows, async (sourceRow, index) => {
     let rowNumber = findSheetRowNumber(sheetRows, sourceRow);
     if (!rowNumber) {
       await appendSheetRows(sheet.token, sheet.spreadsheetToken, sheet.sheetId, sheet.fields, [sourceRow]);
@@ -2118,9 +4400,9 @@ async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
       rowNumber = findSheetRowNumber(sheetRows, sourceRow);
     }
     try {
-      const payload = await collectDetailPayloadWithCooldown(sourceRow, index);
+      const payload = await collectDetailPayloadWithCooldown(sourceRow, index, options);
       const captures = payload.captures || {};
-      const status = captures.audience?.found ? "已补采" : "已补采-未确认粉丝画像";
+      const status = detailStatusByCapture(captures, "已补采", "已补采-未确认粉丝画像");
       await writeSheetCells(
         sheet.token,
         sheet.spreadsheetToken,
@@ -2129,26 +4411,30 @@ async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
         rowNumber,
         detailValuesForSheet(payload.detail, captures, status, payload.detailUrl || "")
       );
-      await writeSheetImage(
-        sheet.token,
-        sheet.spreadsheetToken,
-        sheet.sheetId,
-        sheet.fields,
-        rowNumber,
-        "粉丝画像截图",
-        captures.audience?.screenshot,
-        captures.audience?.imageName
-      );
-      await writeSheetImage(
-        sheet.token,
-        sheet.spreadsheetToken,
-        sheet.sheetId,
-        sheet.fields,
-        rowNumber,
-        "笔记数据截图",
-        captures.overview?.screenshot,
-        captures.overview?.imageName
-      );
+      if (isFansScreenshotEnabledFromCaptures(captures)) {
+        await writeSheetImage(
+          sheet.token,
+          sheet.spreadsheetToken,
+          sheet.sheetId,
+          sheet.fields,
+          rowNumber,
+          "粉丝画像截图",
+          captures.audience?.screenshot,
+          captures.audience?.imageName
+        );
+      }
+      if (isNoteScreenshotEnabledFromCaptures(captures)) {
+        await writeSheetImage(
+          sheet.token,
+          sheet.spreadsheetToken,
+          sheet.sheetId,
+          sheet.fields,
+          rowNumber,
+          "笔记数据截图",
+          captures.overview?.screenshot,
+          captures.overview?.imageName
+        );
+      }
       completed += 1;
     } catch (error) {
       failed += 1;
@@ -2161,7 +4447,10 @@ async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
         }).catch(() => null);
       }
     }
-  });
+    }, detailBackfillConcurrencyForOptions(options));
+  } finally {
+    await closeReusableDetailTab();
+  }
 
   const stopped = Boolean(detailStopRequested);
   detailStopRequested = false;
@@ -2208,9 +4497,10 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
     });
   };
 
-  await runDetailBackfillPool(targetRows, async (item, index) => {
+  try {
+    await runDetailBackfillPool(targetRows, async (item, index) => {
     try {
-      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index);
+      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, sheet.options || {});
       const valuesByField = canonicalBackfillValues(item.row, payload);
       const captures = payload.captures || {};
       const rowWarnings = [captures.audience?.error, captures.overview?.error].filter(Boolean);
@@ -2222,11 +4512,13 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
           canonicalField: column.canonicalField
         }));
       let rowWrites = 0;
+      const textWrites = [];
       for (const column of shape.columns) {
         const current = item.line[column.columnIndex];
         if (nonEmptyCell(current)) continue;
         if (!column.canonicalField) continue;
         if (column.canonicalField === DETAIL_FIELDS[6]) {
+          if (!isFansScreenshotEnabledFromCaptures(captures)) continue;
           if (captures.audience?.screenshot) {
             const imageResult = await writeSheetImageByColumnBestEffort(
               sheet.token,
@@ -2251,7 +4543,9 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
           continue;
         }
         if (column.canonicalField === DETAIL_FIELDS[7]) {
-          if (!columnUsesImageTemplate(column, templateItem)) {
+          const usesImage = columnUsesImageTemplate(column, templateItem);
+          if (usesImage && !isNoteScreenshotEnabledFromCaptures(captures)) continue;
+          if (!usesImage) {
             const value = readMetricValue(valuesByField);
             if (value === undefined || value === null || value === "") continue;
             const cellResult = await writeSheetCellByColumnBestEffort(
@@ -2263,7 +4557,7 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
               value,
               column.fieldName || column.canonicalField
             );
-            if (cellResult.ok) rowWrites += 1;
+            if (cellResult.ok) textWrites.push({ column, value });
             else {
               rowWarnings.push(cellResult.message);
               addWriteFailure(item, column, cellResult.message, value);
@@ -2302,10 +4596,18 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
           value,
           column.fieldName || column.canonicalField
         );
-        if (cellResult.ok) rowWrites += 1;
+        if (cellResult.ok) textWrites.push({ column, value });
         else {
           rowWarnings.push(cellResult.message);
           addWriteFailure(item, column, cellResult.message, value);
+        }
+      }
+      if (textWrites.length) {
+        const verifyResult = await verifySheetTextWrites(sheet.token, sheet.spreadsheetToken, sheet.sheetId, item.rowNumber, textWrites);
+        rowWrites += verifyResult.confirmedCount;
+        for (const failure of verifyResult.failures) {
+          rowWarnings.push(failure.message);
+          addWriteFailure(item, failure.column, failure.message, failure.value);
         }
       }
       if (!rowWrites && !rowWarnings.length && noopSamples.length < 10) {
@@ -2349,7 +4651,10 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
         });
       }
     }
-  });
+    }, detailBackfillConcurrencyForOptions(sheet.options || {}));
+  } finally {
+    await closeReusableDetailTab();
+  }
 
   return {
     sheetId: sheet.sheetId,
@@ -2370,9 +4675,11 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
 }
 
 async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
-  await ensureBitableFieldNames(table.token, table.appToken, table.tableId, DETAIL_FIELDS);
+  const fieldsMeta = await ensureBitableDetailFields(table.token, table.appToken, table.tableId);
   const records = await readBitableRecords(table.token, table.appToken, table.tableId);
-  const rows = records.map(bitableRecordToDetailItem).filter(bitableNeedsDetail);
+  const rows = records
+    .map(bitableRecordToDetailItem)
+    .filter((item) => bitableNeedsDetail(item, fieldsMeta, table.options || {}));
   const maxRows = Number(limit || rows.length);
   const targetRows = rows.slice(0, Math.max(0, Math.min(maxRows, rows.length)));
   let completed = 0;
@@ -2381,15 +4688,22 @@ async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
   let writtenCells = 0;
   const errorSamples = [];
 
-  await runDetailBackfillPool(targetRows, async (item, index) => {
+  try {
+    await runDetailBackfillPool(targetRows, async (item, index) => {
     try {
-      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index);
+      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, table.options || {});
       const valuesByField = canonicalBackfillValues(item.row, payload);
       const captures = payload.captures || {};
       const missingScreenshots = [];
-      if (!captures.audience?.screenshot) missingScreenshots.push(`粉丝画像截图未写入：${captures.audience?.error || "截图缺失"}`);
-      if (!captures.overview?.screenshot) missingScreenshots.push(`笔记数据截图未写入：${captures.overview?.error || "截图缺失"}`);
-      const fields = bitableDetailFields(valuesByField, captures);
+      if (isFansScreenshotEnabledFromCaptures(captures) && !captures.audience?.screenshot) missingScreenshots.push(`粉丝画像截图未写入：${captures.audience?.error || "截图缺失"}`);
+      if (isNoteScreenshotEnabledFromCaptures(captures) && !captures.overview?.screenshot) missingScreenshots.push(`笔记数据截图未写入：${captures.overview?.error || "截图缺失"}`);
+      const fields = await bitableDetailFieldsWithAttachments({
+        token: table.token,
+        appToken: table.appToken,
+        fieldsMeta,
+        valuesByField,
+        captures
+      });
       if (missingScreenshots.length) {
         fields["详情补采备注"] = [fields["详情补采备注"], ...missingScreenshots].filter(Boolean).join("；");
       }
@@ -2405,7 +4719,10 @@ async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
         "详情补采备注": error?.message || String(error)
       }).catch(() => null);
     }
-  });
+    }, detailBackfillConcurrencyForOptions(table.options || {}));
+  } finally {
+    await closeReusableDetailTab();
+  }
 
   return {
     tableId: table.tableId,
@@ -2433,7 +4750,8 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
         token: target.token,
         appToken: target.appToken,
         tableId: item.table_id || item.id,
-        tableTitle: item.name || item.title || item.table_id || item.id
+        tableTitle: item.name || item.title || item.table_id || item.id,
+        options
       })).filter((item) => item.tableId);
     } else {
       const tableId = await chooseBitableTable(target.token, target.appToken, preferredTableId);
@@ -2442,7 +4760,8 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
         token: target.token,
         appToken: target.appToken,
         tableId,
-        tableTitle: found?.name || found?.title || tableId
+        tableTitle: found?.name || found?.title || tableId,
+        options
       }];
     }
 
@@ -2509,7 +4828,8 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
       token: target.token,
       spreadsheetToken: target.spreadsheetToken,
       sheetId: item.sheet_id || item.id,
-      sheetTitle: item.title || item.name || item.sheet_id || item.id
+      sheetTitle: item.title || item.name || item.sheet_id || item.id,
+      options
     })).filter((item) => item.sheetId);
   } else {
     const sheetId = await chooseSheet(target.token, target.spreadsheetToken, preferredSheetId);
@@ -2518,7 +4838,8 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
       token: target.token,
       spreadsheetToken: target.spreadsheetToken,
       sheetId,
-      sheetTitle: found?.title || found?.name || sheetId
+      sheetTitle: found?.title || found?.name || sheetId,
+      options
     }];
   }
 
@@ -2578,10 +4899,10 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
-    if (message?.type === "DOWNLOAD_PGY_CSV") {
+    if (message?.type === "DOWNLOAD_PGY_CSV" || message?.type === "DOWNLOAD_CSV") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
       const csv = rowsToCsv(rows);
-      const filename = message.filename || `pgy-creators-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, "-")}.csv`;
+      const filename = message.filename || exportCsvFilename(rows.length);
       const url = `data:text/csv;charset=utf-8,${encodeURIComponent(csv)}`;
       const downloadId = await chrome.downloads.download({ url, filename, saveAs: true });
       sendResponse({ ok: true, downloadId });
@@ -2592,8 +4913,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
       return;
     }
+    if (message?.type === "ENRICH_ROWS_WITH_DETAILS") {
+      const result = await enrichRowsWithDetails({ rows: message.rows || [], options: message.options || {}, limit: message.limit || 0 });
+      sendResponse(result);
+      return;
+    }
     if (message?.type === "VALIDATE_FEISHU_SYNC_TARGET") {
       const result = await validateFeishuSyncTarget(message.options || {});
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "INSPECT_FEISHU_TABLE_CONFIG") {
+      const result = await inspectFeishuTableConfig(message.options || {});
       sendResponse(result);
       return;
     }
@@ -2617,6 +4948,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
       return;
     }
+    if (message?.type === "FAVORITE_CURRENT_DETAIL") {
+      const result = await startFavoriteCurrentDetailToFeishu({ tab: sender?.tab, options: message.options || {} });
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "ENRICH_PREFAVORITE_QUOTE") {
+      const result = await enrichPreFavoriteQuote({ userId: message.userId || "" });
+      sendResponse(result);
+      return;
+    }
     if (message?.type === "STOP_DETAIL_BACKFILL") {
       detailStopRequested = true;
       sendResponse({ ok: true });
@@ -2624,6 +4965,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "OPEN_OPTIONS_PAGE") {
       await chrome.runtime.openOptionsPage();
+      sendResponse({ ok: true });
+      return;
+    }
+    if (message?.type === "OPEN_FAVORITES_PAGE") {
+      await chrome.tabs.create({ url: chrome.runtime.getURL("favorites.html") });
       sendResponse({ ok: true });
       return;
     }

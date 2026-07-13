@@ -50,6 +50,90 @@
     }
   }
 
+  function cleanHeaders(headers) {
+    const result = {};
+    const blocked = new Set(["host", "origin", "referer", "content-length", "cookie"]);
+    for (const [key, value] of Object.entries(headers || {})) {
+      const normalized = String(key || "").toLowerCase();
+      if (!normalized || blocked.has(normalized) || normalized.startsWith(":")) continue;
+      result[key] = value;
+    }
+    return result;
+  }
+
+  function requestWithBusiness(request, business) {
+    if (!request?.url) return null;
+    let url = "";
+    try {
+      const parsed = new URL(request.url, location.origin);
+      parsed.searchParams.set("business", business === "cooperation" ? "1" : "0");
+      url = parsed.toString();
+    } catch {
+      return null;
+    }
+    return {
+      ...request,
+      url,
+      headers: cleanHeaders(request.headers),
+      captured_at: new Date().toISOString()
+    };
+  }
+
+  async function fetchFromSnapshot(request) {
+    if (!request?.url) return null;
+    const init = {
+      method: request.method || "GET",
+      credentials: "include",
+      headers: cleanHeaders(request.headers)
+    };
+    if (init.method !== "GET" && init.method !== "HEAD" && request.body) init.body = request.body;
+    const response = await nativeFetch(request.url, init);
+    const text = await response.text();
+    const payload = safeJson(text);
+    cachePayload(request.url, payload, request);
+    return { ok: response.ok, status: response.status, url: request.url, payload };
+  }
+
+  function requestListFor(kind, business) {
+    const requests = state.cache.requests?.[kind];
+    if (!requests) return [];
+    if (kind === "notes_detail") {
+      const flattened = [];
+      const source = requests[business] || requests;
+      for (const noteType of Object.keys(source || {})) {
+        const pages = source[noteType];
+        if (!pages || typeof pages !== "object") continue;
+        for (const pageNumber of Object.keys(pages)) {
+          if (pages[pageNumber]?.url) flattened.push(pages[pageNumber]);
+        }
+      }
+      return flattened;
+    }
+    return requests[business]?.url ? [requests[business]] : [];
+  }
+
+  async function prefetchBusinessData(targetBusiness = "cooperation") {
+    const fetched = [];
+    const errors = [];
+    const kinds = ["data_summary", "notes_rate", "notes_detail"];
+    for (const kind of kinds) {
+      const sourceRequests = requestListFor(kind, targetBusiness).length
+        ? requestListFor(kind, targetBusiness)
+        : requestListFor(kind, targetBusiness === "cooperation" ? "daily" : "cooperation");
+      for (const sourceRequest of sourceRequests.slice(0, kind === "notes_detail" ? 6 : 2)) {
+        const nextRequest = requestWithBusiness(sourceRequest, targetBusiness);
+        if (!nextRequest?.url) continue;
+        try {
+          const result = await fetchFromSnapshot(nextRequest);
+          fetched.push({ kind, ok: result?.ok, status: result?.status, url: result?.url });
+        } catch (error) {
+          errors.push({ kind, url: nextRequest.url, message: error?.message || String(error) });
+        }
+      }
+    }
+    return { ok: !errors.length, business: targetBusiness, fetched, errors };
+  }
+
   function numberParam(url, name, fallback = 0) {
     try {
       const parsed = new URL(url, location.origin);
@@ -110,15 +194,18 @@
       return;
     }
     if (kind === "notes_detail") {
+      const business = businessFromUrl(absolute);
       const noteType = numberParam(absolute, "noteType", 0);
       const pageNumber = numberParam(absolute, "pageNumber", 1);
       state.cache.notes_detail = state.cache.notes_detail || {};
-      state.cache.notes_detail[noteType] = state.cache.notes_detail[noteType] || {};
-      state.cache.notes_detail[noteType][pageNumber] = data;
+      state.cache.notes_detail[business] = state.cache.notes_detail[business] || {};
+      state.cache.notes_detail[business][noteType] = state.cache.notes_detail[business][noteType] || {};
+      state.cache.notes_detail[business][noteType][pageNumber] = data;
       state.cache.requests = state.cache.requests || {};
       state.cache.requests.notes_detail = state.cache.requests.notes_detail || {};
-      state.cache.requests.notes_detail[noteType] = state.cache.requests.notes_detail[noteType] || {};
-      state.cache.requests.notes_detail[noteType][pageNumber] = request;
+      state.cache.requests.notes_detail[business] = state.cache.requests.notes_detail[business] || {};
+      state.cache.requests.notes_detail[business][noteType] = state.cache.requests.notes_detail[business][noteType] || {};
+      state.cache.requests.notes_detail[business][noteType][pageNumber] = request;
       return;
     }
     state.cache[kind] = data;
@@ -164,4 +251,5 @@
   };
 
   window.__PGY_DETAIL_API_CACHE__ = state;
+  window.__PGY_DETAIL_API_PREFETCH__ = prefetchBusinessData;
 })();

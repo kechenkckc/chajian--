@@ -1,0 +1,105 @@
+#pgy-xhs-profile-bridge-bar {
+  box-sizing: border-box;
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  z-index: 2147483000;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 116px;
+  height: 36px;
+  padding: 0 13px 0 9px;
+  color: #193a2a;
+  border: 1px solid rgba(31, 90, 62, 0.22);
+  border-radius: 999px;
+  background: #ffffff;
+  box-shadow: 0 10px 28px rgba(18, 34, 26, 0.12);
+  font: 600 13px/1 "Microsoft YaHei", "PingFang SC", sans-serif;
+  letter-spacing: 0;
+  cursor: pointer;
+  user-select: none;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  color: #ffffff;
+  border-radius: 50%;
+  background: #1f5a3e;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool strong {
+  color: inherit;
+  font: inherit;
+  white-space: nowrap;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool:hover {
+  color: #0d2b1d;
+  border-color: rgba(31, 90, 62, 0.44);
+  background: #f4faf6;
+  transform: translateY(-1px);
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool:active {
+  transform: translateY(0);
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool:disabled {
+  cursor: wait;
+  opacity: 0.72;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-favorite.is-saved {
+  color: #8a4b10;
+  border-color: rgba(180, 112, 32, 0.28);
+  background: #fff8ed;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-favorite.is-saved span {
+  background: #b36a1f;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-open-favorites span {
+  background: #315a83;
+}
+
+#pgy-xhs-profile-bridge-bar.pgy-xhs-profile-bridge-inline {
+  flex: 0 0 auto;
+  margin-right: 28px;
+}
+
+#pgy-xhs-profile-bridge-bar.pgy-xhs-profile-bridge-floating {
+  position: absolute;
+}
+
+@media (max-width: 760px) {
+  #pgy-xhs-profile-bridge-bar {
+    flex-direction: column;
+    align-items: flex-end;
+  }
+
+  #pgy-xhs-profile-bridge-bar .pgy-xhs-profile-tool {
+    min-width: 106px;
+    height: 34px;
+    padding-right: 11px;
+    font-size: 12px;
+  }
+
+  #pgy-xhs-profile-bridge-bar.pgy-xhs-profile-bridge-inline {
+    margin-right: 14px;
+  }
+}
