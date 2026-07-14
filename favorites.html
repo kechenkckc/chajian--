@@ -29,6 +29,31 @@
         <p id="status">从小红书或蒲公英达人主页点击“预收藏”后，会显示在这里。</p>
       </section>
 
+      <section class="data-panel" aria-labelledby="dataPanelTitle">
+        <div class="data-panel-copy">
+          <p class="eyebrow">DATA DESK</p>
+          <h2 id="dataPanelTitle">达人库数据工具</h2>
+          <p>导入会按达人 ID 合并，保留已有飞书写回记录；全量更新会重新获取粉丝量、赞藏与最新报价。</p>
+        </div>
+        <div class="data-actions">
+          <button id="exportBtn" type="button">导出 Excel</button>
+          <label class="file-button" for="importFile">导入表格</label>
+          <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+          <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
+        </div>
+        <div class="online-import">
+          <label for="onlineTableUrl">在线表格地址</label>
+          <div>
+            <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
+            <button id="importOnlineBtn" type="button">读取并导入</button>
+          </div>
+        </div>
+        <div id="dataProgress" class="data-progress" hidden>
+          <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
+          <progress id="dataProgressBar" max="100" value="0"></progress>
+        </div>
+      </section>
+
       <section class="filter-panel">
         <div class="filter-row">
           <label class="search-field">
@@ -72,6 +97,7 @@
 
       <section id="favoriteList" class="favorite-list"></section>
     </main>
+    <script src="favorites-data.js"></script>
     <script src="favorites.js"></script>
   </body>
 </html>

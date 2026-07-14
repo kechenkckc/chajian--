@@ -179,6 +179,37 @@
       }
       #pgy-detail-favorite-btn:hover { background: #fff5f7; }
       #pgy-detail-prefavorite-btn:hover { background: #eaf5dd; }
+      .pgy-similar-favorite-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        gap: 4px;
+        min-width: 68px;
+        height: 28px;
+        margin-left: auto;
+        padding: 0 9px;
+        border: 1px solid rgba(255, 36, 72, 0.25);
+        border-radius: 14px;
+        color: #ff2448;
+        background: #fff;
+        font: 500 13px/1 "Microsoft YaHei", "PingFang SC", sans-serif;
+        cursor: pointer;
+        white-space: nowrap;
+        transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
+      }
+      .pgy-similar-favorite-btn:hover {
+        border-color: rgba(255, 36, 72, 0.48);
+        background: #fff5f7;
+      }
+      .pgy-similar-favorite-btn.is-accepted {
+        border-color: rgba(36, 93, 60, 0.28);
+        color: #245d3c;
+        background: #f7ffe9;
+      }
+      .pgy-similar-favorite-btn[disabled] {
+        cursor: default;
+        opacity: 0.72;
+      }
       #pgy-detail-favorite-btn[disabled],
       #pgy-detail-prefavorite-btn[disabled] {
         cursor: default;
@@ -334,6 +365,137 @@
     if (exists) button.textContent = "✓ 已预收藏";
   }
 
+  function detailUserIdFromUrl(value) {
+    try {
+      const url = new URL(String(value || ""), location.origin);
+      return (url.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    } catch (_error) {
+      return "";
+    }
+  }
+
+  function findSimilarRecommendationRoot() {
+    const headings = Array.from(document.querySelectorAll("div, span, p, h2, h3, h4"))
+      .filter((element) => {
+        const text = cleanText(element.textContent || "");
+        return text.length <= 60 && /相似的?博主推荐|相似博主/.test(text);
+      });
+    for (const heading of headings) {
+      let root = heading.parentElement;
+      for (let depth = 0; root && depth < 6; depth += 1, root = root.parentElement) {
+        const detailTriggers = Array.from(root.querySelectorAll("a, button, span, div"))
+          .filter((element) => cleanText(element.textContent || "") === "查看详情" && smallVisibleRect(element));
+        if (detailTriggers.length) return root;
+      }
+    }
+    return null;
+  }
+
+  function findSimilarBloggerCard(detailTrigger, root) {
+    let card = detailTrigger;
+    for (let depth = 0; card && card !== root && depth < 7; depth += 1, card = card.parentElement) {
+      const rect = smallVisibleRect(card);
+      const text = cleanText(card.textContent || "");
+      if (!rect || rect.width < 220 || rect.width > 560 || rect.height < 100 || rect.height > 380) continue;
+      if (/查看详情/.test(text) && /粉丝/.test(text)) return card;
+    }
+    return null;
+  }
+
+  function similarBloggerUrl(card, detailTrigger) {
+    const elements = [detailTrigger, card, ...card.querySelectorAll("[href], [data-user-id], [data-userid], [data-blogger-id], [data-kol-id]")];
+    for (const element of elements) {
+      const values = [element.href, ...Array.from(element.attributes || []).map((attribute) => attribute.value)];
+      for (const value of values) {
+        const userId = detailUserIdFromUrl(value);
+        if (userId) return `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}`;
+        const matchedId = String(value || "").match(/(?:userId|user_id|bloggerId|blogger_id|kolId|kol_id)[=:"']+([A-Za-z0-9_-]{6,})/i);
+        if (matchedId) return `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${matchedId[1]}`;
+      }
+    }
+
+    const visited = new WeakSet();
+    const keys = ["userId", "user_id", "bloggerId", "blogger_id", "kolId", "kol_id", "id"];
+    function findUserId(value, depth = 0) {
+      if (!value || typeof value !== "object" || depth > 4 || visited.has(value)) return "";
+      visited.add(value);
+      for (const key of keys) {
+        const candidate = String(value[key] || "").trim();
+        if (/^[A-Za-z0-9_-]{6,}$/.test(candidate)) return candidate;
+      }
+      for (const key of ["props", "attrs", "data", "setupState", "$props", "item", "user", "blogger", "kol", "ctx", "proxy"]) {
+        const candidate = findUserId(value[key], depth + 1);
+        if (candidate) return candidate;
+      }
+      return "";
+    }
+    const userId = findUserId(detailTrigger.__vueParentComponent)
+      || findUserId(card.__vueParentComponent)
+      || findUserId(detailTrigger.__vue__)
+      || findUserId(card.__vue__);
+    return userId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}` : "";
+  }
+
+  function installSimilarFavoriteButtons() {
+    const root = findSimilarRecommendationRoot();
+    if (!root) return;
+    const currentUserId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    const handledUserIds = new Set();
+    const detailTriggers = Array.from(root.querySelectorAll("a, button, span, div"))
+      .filter((element) => cleanText(element.textContent || "") === "查看详情" && smallVisibleRect(element));
+    for (const [cardIndex, detailTrigger] of detailTriggers.entries()) {
+      const card = findSimilarBloggerCard(detailTrigger, root);
+      if (!card) continue;
+      const detailUrl = similarBloggerUrl(card, detailTrigger);
+      const userId = detailUserIdFromUrl(detailUrl) || `card-${cardIndex}`;
+      if (userId === currentUserId || handledUserIds.has(userId)) continue;
+      handledUserIds.add(userId);
+      if (card.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(userId)}"]`)) continue;
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "pgy-similar-favorite-btn";
+      button.dataset.userId = userId;
+      button.textContent = "☆ 收藏";
+      button.title = "采集这位达人的完整详情并收藏到飞书";
+      button.addEventListener("click", async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        event.stopImmediatePropagation();
+        if (button.disabled) return;
+        button.disabled = true;
+        button.textContent = "收藏中...";
+        try {
+          if (!detailUrl) throw new Error("暂未识别到这位达人的详情地址，请先点击“查看详情”进入该达人页面后收藏。");
+          const result = await chrome.runtime.sendMessage({
+            type: "FAVORITE_DETAIL_URL",
+            detailUrl
+          });
+          if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
+          button.textContent = "✓ 已发起";
+          button.classList.add("is-accepted");
+          showFavoriteToast(`已开始后台收藏${cleanText(card.querySelector("strong, h3, h4")?.textContent || "这位达人")}。`);
+        } catch (error) {
+          button.textContent = "☆ 收藏";
+          button.disabled = false;
+          showFavoriteToast(error?.message || String(error), true);
+        }
+      }, true);
+      detailTrigger.before(button);
+    }
+  }
+
+  function observeSimilarFavoriteCards() {
+    if (window.__PGY_SIMILAR_FAVORITE_OBSERVER__) return;
+    let timer = 0;
+    const observer = new MutationObserver(() => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(installSimilarFavoriteButtons, 120);
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    window.__PGY_SIMILAR_FAVORITE_OBSERVER__ = observer;
+  }
+
   function installFavoriteButton() {
     ensureFavoriteStyle();
     let tools = document.getElementById("pgy-detail-favorite-tools");
@@ -359,9 +521,8 @@
           showFavoriteToast("收藏任务已开始，可关闭当前页或继续操作。完成后会系统通知。");
         } catch (error) {
           button.textContent = "☆ 收藏";
-          showFavoriteToast(error?.message || String(error), true);
-        } finally {
           button.disabled = false;
+          showFavoriteToast(error?.message || String(error), true);
         }
       });
     }
@@ -860,7 +1021,9 @@
       hideStyle.textContent = `
         #pgy-exporter-panel,
         #pgy-detail-favorite-btn,
+        #pgy-detail-prefavorite-btn,
         #pgy-detail-favorite-toast,
+        .pgy-similar-favorite-btn,
         [id^="pgy-exporter-"],
         .pgy-exporter-head,
         .pgy-exporter-body,
@@ -952,12 +1115,44 @@
         .catch((error) => sendResponse({ ok: false, message: error?.message || String(error) }));
       return true;
     }
+    if (message?.type === "PGY_FAVORITE_TASK_STATUS") {
+      const currentUserId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+      const targetUserId = String(message.userId || "");
+      const mainButton = document.getElementById("pgy-detail-favorite-btn");
+      const similarButton = targetUserId
+        ? document.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(targetUserId)}"]`)
+        : null;
+      const targetButton = targetUserId === currentUserId ? mainButton : similarButton;
+      if (message.status === "completed") {
+        if (targetButton) {
+          targetButton.textContent = "✓ 已收藏";
+          targetButton.disabled = true;
+          targetButton.classList.add("is-accepted");
+        }
+        showFavoriteToast("收藏完成，达人数据已写入飞书。");
+      } else if (message.status === "failed") {
+        if (targetButton) {
+          targetButton.textContent = "☆ 收藏";
+          targetButton.disabled = false;
+          targetButton.classList.remove("is-accepted");
+        }
+        showFavoriteToast(message.message || "收藏写回失败", true);
+      }
+      sendResponse({ ok: true });
+      return false;
+    }
     return false;
   });
 
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", installFavoriteButton, { once: true });
+    document.addEventListener("DOMContentLoaded", () => {
+      installFavoriteButton();
+      installSimilarFavoriteButtons();
+      observeSimilarFavoriteCards();
+    }, { once: true });
   } else {
     installFavoriteButton();
+    installSimilarFavoriteButtons();
+    observeSimilarFavoriteCards();
   }
 })();

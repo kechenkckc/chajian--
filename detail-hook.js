@@ -112,7 +112,30 @@
     return requests[business]?.url ? [requests[business]] : [];
   }
 
+  async function triggerCooperationTab() {
+    const ready = () => Boolean(state.cache.data_summary?.cooperation && state.cache.notes_rate?.cooperation);
+    if (ready()) return { ok: true, triggered: false, ready: true };
+    const candidates = Array.from(document.querySelectorAll("button, div, span"))
+      .filter((element) => element.children.length === 0 && element.textContent.trim() === "合作笔记")
+      .filter((element) => {
+        const rect = element.getBoundingClientRect();
+        return rect.width > 0 && rect.height > 0;
+      });
+    const target = candidates.find((element) => !/(active|selected)/i.test(String(element.className || ""))) || candidates[0];
+    if (!target) return { ok: false, triggered: false, message: "未找到合作笔记页签" };
+    target.click();
+    for (let attempt = 0; attempt < 24; attempt += 1) {
+      if (ready()) return { ok: true, triggered: true, ready: true };
+      await new Promise((resolve) => setTimeout(resolve, 250));
+    }
+    return { ok: false, triggered: true, ready: false, message: "合作笔记接口未在等待时间内返回" };
+  }
+
   async function prefetchBusinessData(targetBusiness = "cooperation") {
+    if (targetBusiness === "cooperation") {
+      const triggered = await triggerCooperationTab();
+      if (triggered.ready) return { ...triggered, business: targetBusiness, fetched: [], errors: [] };
+    }
     const fetched = [];
     const errors = [];
     const kinds = ["data_summary", "notes_rate", "notes_detail"];

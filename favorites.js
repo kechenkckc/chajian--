@@ -13,6 +13,15 @@ const activeWriteTarget = document.getElementById("activeWriteTarget");
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
 const categoryFilters = document.getElementById("categoryFilters");
+const exportBtn = document.getElementById("exportBtn");
+const importFile = document.getElementById("importFile");
+const updateAllBtn = document.getElementById("updateAllBtn");
+const onlineTableUrl = document.getElementById("onlineTableUrl");
+const importOnlineBtn = document.getElementById("importOnlineBtn");
+const dataProgress = document.getElementById("dataProgress");
+const dataProgressLabel = document.getElementById("dataProgressLabel");
+const dataProgressValue = document.getElementById("dataProgressValue");
+const dataProgressBar = document.getElementById("dataProgressBar");
 const DEFAULT_CATEGORIES = [
   "美妆",
   "护肤",
@@ -46,6 +55,7 @@ const DEFAULT_CATEGORIES = [
 let favorites = [];
 let selectedUserIds = new Set();
 let writing = false;
+let dataBusy = false;
 let activeCategory = "";
 let configuredTables = [];
 let activeTable = null;
@@ -279,6 +289,10 @@ function normalizeFavorites(items) {
       likesText: String(item?.likesText || "").trim(),
       picturePriceText: String(item?.picturePriceText || item?.picturePrice || item?.quotePrice || "").trim(),
       videoPriceText: String(item?.videoPriceText || item?.videoPrice || "").trim(),
+      cooperationExposureMedian: String(item?.cooperationExposureMedian ?? "").trim(),
+      cooperationReadMedian: String(item?.cooperationReadMedian ?? "").trim(),
+      cooperationInteractionMedian: String(item?.cooperationInteractionMedian ?? "").trim(),
+      cooperationNoteCount: String(item?.cooperationNoteCount ?? "").trim(),
       quoteStatus: String(item?.quoteStatus || "").trim(),
       bio: sanitizeBio(item?.bio),
       categoryTags: normalizeCategoryTags(item?.categoryTags, item?.categorySource),
@@ -373,6 +387,112 @@ function updateSelectionState() {
   selectAll.disabled = writing || visible.length === 0;
   selectAll.checked = visible.length > 0 && visibleSelected === visible.length;
   selectAll.indeterminate = visibleSelected > 0 && visibleSelected < visible.length;
+  exportBtn.disabled = dataBusy || favorites.length === 0;
+  importFile.disabled = dataBusy;
+  importOnlineBtn.disabled = dataBusy;
+  updateAllBtn.disabled = dataBusy || favorites.length === 0;
+}
+
+function setDataBusy(value) {
+  dataBusy = Boolean(value);
+  updateSelectionState();
+}
+
+function showDataProgress(label, completed = 0, total = 0) {
+  const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
+  dataProgress.hidden = false;
+  dataProgressLabel.textContent = label;
+  dataProgressValue.textContent = `${percentage}%`;
+  dataProgressBar.value = percentage;
+}
+
+function hideDataProgress() {
+  dataProgress.hidden = true;
+  dataProgressBar.value = 0;
+}
+
+async function importFavoriteObjects(rows, sourceLabel) {
+  const imported = FavoriteDataTools.objectsToFavorites(rows);
+  if (!imported.length) throw new Error("表格中没有识别到达人 ID，请检查“达人ID / 博主ID / 蒲公英主页”列。");
+  const result = FavoriteDataTools.mergeFavorites(favorites, imported);
+  await saveFavorites(result.items);
+  setStatus(`${sourceLabel}完成：新增 ${result.added} 位，更新 ${result.updated} 位，共识别 ${imported.length} 位达人。`);
+  return result;
+}
+
+async function exportFavorites() {
+  if (!favorites.length) throw new Error("达人库暂无可导出的数据。");
+  setDataBusy(true);
+  setStatus(`正在导出 ${favorites.length} 位达人...`);
+  try {
+    const rows = favorites.map(FavoriteDataTools.toExportRow);
+    const timestamp = new Date().toISOString().replace(/[:T]/g, "-").replace(/\.\d{3}Z$/, "");
+    const result = await chrome.runtime.sendMessage({
+      type: "DOWNLOAD_FAVORITES_XLSX",
+      rows,
+      filename: `达人库-${timestamp}.xlsx`
+    });
+    if (!result?.ok) throw new Error(result?.message || "导出失败");
+    setStatus(`已生成 ${favorites.length} 位达人的 Excel 表格。`);
+  } finally {
+    setDataBusy(false);
+  }
+}
+
+async function importFavoriteFile(file) {
+  if (!file) return;
+  setDataBusy(true);
+  showDataProgress(`正在读取 ${file.name}...`);
+  try {
+    const isCsv = /\.csv$/i.test(file.name) || file.type === "text/csv";
+    const matrix = isCsv
+      ? FavoriteDataTools.parseCsv(await file.text())
+      : await FavoriteDataTools.parseXlsx(file);
+    const rows = FavoriteDataTools.matrixToObjects(matrix);
+    await importFavoriteObjects(rows, `导入 ${file.name}`);
+  } finally {
+    importFile.value = "";
+    hideDataProgress();
+    setDataBusy(false);
+  }
+}
+
+async function importOnlineTable() {
+  const url = String(onlineTableUrl.value || "").trim();
+  if (!url) throw new Error("请先填写在线表格地址。");
+  setDataBusy(true);
+  showDataProgress("正在读取在线表格...");
+  try {
+    const result = await chrome.runtime.sendMessage({ type: "READ_ONLINE_CREATOR_TABLE", url });
+    if (!result?.ok) throw new Error(result?.message || "在线表格读取失败");
+    const rows = Array.isArray(result.rows)
+      ? result.rows
+      : FavoriteDataTools.matrixToObjects(Array.isArray(result.matrix) ? result.matrix : FavoriteDataTools.parseCsv(result.csv || ""));
+    await chrome.storage.local.set({ favoriteOnlineTableUrl: url });
+    await importFavoriteObjects(rows, `在线表格导入（${result.source || "表格"}）`);
+  } finally {
+    hideDataProgress();
+    setDataBusy(false);
+  }
+}
+
+async function updateAllFavorites() {
+  if (!favorites.length) throw new Error("达人库暂无可更新的数据。");
+  setDataBusy(true);
+  showDataProgress(`准备更新 ${favorites.length} 位达人...`, 0, favorites.length);
+  setStatus("正在获取所有达人的最新粉丝量、赞藏与报价，请保持蒲公英登录状态。");
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: "REFRESH_ALL_PREFAVORITES",
+      userIds: favorites.map((item) => item.userId)
+    });
+    if (!result?.ok) throw new Error(result?.message || "达人信息更新失败");
+    await loadFavorites();
+    setStatus(`达人信息更新完成：成功 ${result.completed} 位，失败 ${result.failed} 位。${result.failed ? "失败达人已保留原数据并标记原因。" : ""}`, result.failed > 0);
+  } finally {
+    hideDataProgress();
+    setDataBusy(false);
+  }
 }
 
 async function loadFavorites() {
@@ -494,6 +614,10 @@ function favoriteToFeishuRow(item) {
     "获赞与收藏": item.likesText || "",
     "图文报价": item.picturePriceText || "",
     "视频报价": item.videoPriceText || "",
+    "曝光中位数（合作）": item.cooperationExposureMedian || "",
+    "阅读中位数（合作）": item.cooperationReadMedian || "",
+    "互动中位数（合作）": item.cooperationInteractionMedian || "",
+    "已合作笔记数": item.cooperationNoteCount || "",
     "账号类型": (item.categoryTags || []).join("、"),
     "IP城市": item.location || "",
     "数据来源": "xhs_profile_prefavorite",
@@ -521,12 +645,25 @@ async function syncSelectedToFeishu() {
     throw new Error("请先在飞书配置页填写 App ID 和 App Secret。");
   }
 
+  const validation = await chrome.runtime.sendMessage({ type: "VALIDATE_FEISHU_SYNC_TARGET", options });
+  if (!validation?.ok) throw new Error(validation?.message || "目标飞书表格检测失败");
+  options.collectionMode = validation.collectionMode === "detail" ? "detail" : "fast";
+  options.detailCaptureFansScreenshot = Boolean(validation.detailCaptureFansScreenshot);
+  options.detailCaptureNoteScreenshot = Boolean(validation.detailCaptureNoteScreenshot);
+
   writing = true;
   updateSelectionState();
   const targetLabel = activeTableLabel();
-  setStatus(`正在写入 ${targets.length} 位预收藏达人到「${targetLabel}」...`);
+  setStatus(`正在按目标表要求准备 ${targets.length} 位预收藏达人...`);
   try {
-    const rows = targets.map(favoriteToFeishuRow);
+    let rows = targets.map(favoriteToFeishuRow);
+    if (options.collectionMode === "detail") {
+      setStatus(`目标表需要详情数据，正在补采 ${rows.length} 位预收藏达人...`);
+      const enrichment = await chrome.runtime.sendMessage({ type: "ENRICH_ROWS_WITH_DETAILS", rows, options });
+      if (!enrichment?.ok) throw new Error(enrichment?.message || "预收藏达人详情补采失败");
+      rows = Array.isArray(enrichment.rows) ? enrichment.rows : rows;
+    }
+    setStatus(`正在写入 ${rows.length} 位预收藏达人到「${targetLabel}」...`);
     const result = await chrome.runtime.sendMessage({ type: "SYNC_FEISHU_DIRECT", rows, options });
     if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
     const now = new Date().toISOString();
@@ -609,6 +746,10 @@ favoriteConfiguredTable.addEventListener("change", () => applyConfiguredTableSel
 
 refreshBtn.addEventListener("click", () => loadFavorites().catch((error) => setStatus(error.message, true)));
 clearBtn.addEventListener("click", () => clearFavorites().catch((error) => setStatus(error.message, true)));
+exportBtn.addEventListener("click", () => exportFavorites().catch((error) => setStatus(error.message, true)));
+importFile.addEventListener("change", () => importFavoriteFile(importFile.files?.[0]).catch((error) => setStatus(error.message, true)));
+importOnlineBtn.addEventListener("click", () => importOnlineTable().catch((error) => setStatus(error.message, true)));
+updateAllBtn.addEventListener("click", () => updateAllFavorites().catch((error) => setStatus(error.message, true)));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
@@ -619,6 +760,20 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (changes.feishuTableConfigs) {
     loadConfiguredTables({ announce: true }).catch((error) => setStatus(error.message, true));
   }
+  if (changes.pgyPreFavoriteRefreshProgress?.newValue) {
+    const progress = changes.pgyPreFavoriteRefreshProgress.newValue;
+    if (progress.running) {
+      showDataProgress(
+        `正在更新 ${progress.currentName || progress.currentUserId || "达人"}（成功 ${progress.completed || 0}，失败 ${progress.failed || 0}）`,
+        (progress.completed || 0) + (progress.failed || 0),
+        progress.total || favorites.length
+      );
+    }
+  }
 });
+
+chrome.storage.local.get({ favoriteOnlineTableUrl: "" }).then((stored) => {
+  onlineTableUrl.value = stored.favoriteOnlineTableUrl || "";
+}).catch(() => null);
 
 Promise.all([loadFavorites(), loadConfiguredTables()]).catch((error) => setStatus(error.message, true));

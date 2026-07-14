@@ -58,9 +58,9 @@
       </section>
 
       <section class="band">
-        <h2>采集模式</h2>
+        <h2>默认采集模式</h2>
         <label>
-          <span>导出/写入模式</span>
+          <span>仅导出 CSV 时</span>
           <select id="collectionMode">
             <option value="detail">全采集：列表后补采达人详情</option>
             <option value="fast">快速采集：只采集找博主列表接口</option>
@@ -74,7 +74,7 @@
           <input id="detailCaptureNoteScreenshot" type="checkbox" />
           <span>全采集时写入笔记数据截图</span>
         </label>
-        <p class="note">全采集会逐个达人补齐详情字段；快速采集只使用找博主列表接口。截图会增加耗时，但能写入图片列。</p>
+        <p class="note">写入飞书前会先识别目标表字段并自动决定模式：存在详情或截图字段时全采集，否则快速采集。这里的设置仅用于不写入飞书的 CSV 导出。</p>
       </section>
 
       <div hidden>

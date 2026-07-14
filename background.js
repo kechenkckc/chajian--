@@ -993,8 +993,15 @@ async function readSheetValuesFlexible(token, spreadsheetToken, sheetId) {
   throw lastError || new Error("读取飞书表格失败。");
 }
 
-function exportFieldsForRows(rows) {
-  return referenceExportFieldNames();
+function exportFieldsForRows(rows, options = {}) {
+  const detailFieldSet = new Set(DETAIL_FIELDS);
+  return REFERENCE_EXPORT_COLUMNS
+    .filter((column) => {
+      if (!detailFieldSet.has(column.canonicalField)) return true;
+      if (options.collectionMode === "fast") return false;
+      return (rows || []).some((row) => nonEmptyCell(rowValueForMappedColumn(row, column)));
+    })
+    .map((column) => column.fieldName);
 }
 
 async function writeSheetHeader(token, spreadsheetToken, sheetId, rows) {
@@ -1040,8 +1047,8 @@ async function ensureSheetFields(token, spreadsheetToken, sheetId, rows, require
   return fields;
 }
 
-async function ensureMappedSheetShape(token, spreadsheetToken, sheetId, values, rows) {
-  const requiredFields = exportFieldsForRows(rows);
+async function ensureMappedSheetShape(token, spreadsheetToken, sheetId, values, rows, options = {}) {
+  const requiredFields = exportFieldsForRows(rows, options);
   if (!effectiveSheetWidth(values)) {
     await writeSheetHeader(token, spreadsheetToken, sheetId, rows);
     return referenceExportShape();
@@ -1704,6 +1711,35 @@ function canonicalFieldForHeader(header, context = "") {
     }
   }
   return "";
+}
+
+function rowsToSimpleXlsx(rows, sheetName = "达人库") {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  const columns = [];
+  for (const row of safeRows) {
+    for (const key of Object.keys(row || {})) {
+      if (!columns.includes(key)) columns.push(key);
+    }
+  }
+  if (!columns.length) columns.push("达人ID");
+  const rowXml = [
+    `<row r="1" ht="25" customHeight="1">${columns.map((column, index) => xlsxCell(index + 1, 1, column, 1)).join("")}</row>`
+  ];
+  safeRows.forEach((row, rowIndex) => {
+    rowXml.push(`<row r="${rowIndex + 2}">${columns.map((column, columnIndex) => xlsxCell(columnIndex + 1, rowIndex + 2, row?.[column], 0)).join("")}</row>`);
+  });
+  const columnsXml = columns.map((column, index) => `<col min="${index + 1}" max="${index + 1}" width="${columnWidth(column)}" customWidth="1"/>`).join("");
+  const lastColumn = columnName(columns.length);
+  const sheetXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetViews><sheetView workbookViewId="0"><pane ySplit="1" topLeftCell="A2" activePane="bottomLeft" state="frozen"/></sheetView></sheetViews><sheetFormatPr defaultRowHeight="18"/><cols>${columnsXml}</cols><sheetData>${rowXml.join("")}</sheetData><autoFilter ref="A1:${lastColumn}${Math.max(1, safeRows.length + 1)}"/></worksheet>`;
+  const stylesXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><styleSheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><fonts count="2"><font><sz val="10"/><name val="Microsoft YaHei"/></font><font><b/><sz val="10"/><name val="Microsoft YaHei"/></font></fonts><fills count="3"><fill><patternFill patternType="none"/></fill><fill><patternFill patternType="gray125"/></fill><fill><patternFill patternType="solid"><fgColor rgb="FFD7F55F"/><bgColor indexed="64"/></patternFill></fill></fills><borders count="2"><border><left/><right/><top/><bottom/><diagonal/></border><border><left style="thin"/><right style="thin"/><top style="thin"/><bottom style="thin"/><diagonal/></border></borders><cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs><cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles><cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/><xf numFmtId="0" fontId="1" fillId="2" borderId="1" applyFont="1" applyFill="1" applyBorder="1" applyAlignment="1" xfId="0"><alignment horizontal="center" vertical="center"/></xf></cellXfs></styleSheet>`;
+  return zipFiles([
+    { name: "[Content_Types].xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/><Override PartName="/xl/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.styles+xml"/></Types>` },
+    { name: "_rels/.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>` },
+    { name: "xl/workbook.xml", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="${xmlEscape(sheetName)}" sheetId="1" r:id="rId1"/></sheets></workbook>` },
+    { name: "xl/_rels/workbook.xml.rels", content: `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>` },
+    { name: "xl/styles.xml", content: stylesXml },
+    { name: "xl/worksheets/sheet1.xml", content: sheetXml }
+  ]);
 }
 
 function isAmbiguousCreatorTypeHeader(header) {
@@ -2446,9 +2482,9 @@ async function ensureBitableDetailFields(token, appToken, tableId, records = [])
   return fields;
 }
 
-async function ensureMappedBitableFields(token, appToken, tableId, rows) {
+async function ensureMappedBitableFields(token, appToken, tableId, rows, options = {}) {
   const fields = await listBitableFields(token, appToken, tableId);
-  const requiredFields = exportFieldsForRows(rows);
+  const requiredFields = exportFieldsForRows(rows, options);
   const mapped = [];
   const existingNames = new Set();
   const usedNames = new Set();
@@ -2576,7 +2612,7 @@ async function syncRowsToBitable({ token, parsed, rows, options }) {
     }
     tableId = tables[0]?.table_id || tables[0]?.id || "";
   }
-  const mappedFields = await ensureMappedBitableFields(token, parsed.token, tableId, rows);
+  const mappedFields = await ensureMappedBitableFields(token, parsed.token, tableId, rows, options);
   const records = await readBitableRecords(token, parsed.token, tableId);
   const updateExisting = Boolean(options.syncUpdateExisting);
   const newRows = [];
@@ -2646,6 +2682,43 @@ async function readBitableRecords(token, appToken, tableId) {
     pageToken = data.page_token || data.pageToken || "";
   } while (pageToken);
   return records;
+}
+
+function googleSheetCsvUrl(value) {
+  const parsed = new URL(String(value || "").trim());
+  if (parsed.hostname !== "docs.google.com") return parsed.toString();
+  const spreadsheetId = (parsed.pathname.match(/\/spreadsheets\/d\/([^/]+)/) || [])[1];
+  if (!spreadsheetId) return parsed.toString();
+  const gid = parsed.searchParams.get("gid") || (parsed.hash.match(/gid=(\d+)/) || [])[1] || "0";
+  return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${encodeURIComponent(gid)}`;
+}
+
+async function readOnlineCreatorTable(url) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl) throw new Error("请填写在线表格地址。");
+  const parsedUrl = new URL(cleanUrl);
+  if (parsedUrl.hostname.endsWith("feishu.cn") || parsedUrl.hostname.endsWith("larksuite.com")) {
+    const options = await chrome.storage.local.get({ feishuAppId: "", feishuAppSecret: "" });
+    if (!options.feishuAppId || !options.feishuAppSecret) throw new Error("读取飞书在线表格前，请先在飞书配置页填写 App ID 和 App Secret。");
+    const token = await tenantToken(options.feishuAppId, options.feishuAppSecret);
+    const target = await resolveWikiTarget(parseFeishuUrl(cleanUrl), token);
+    if (target.resourceType === "bitable") {
+      const tableId = await chooseBitableTable(token, target.token, target.tableId || "");
+      const records = await readBitableRecords(token, target.token, tableId);
+      return { ok: true, source: "飞书多维表格", rows: records.map((record) => record.fields || {}) };
+    }
+    if (target.resourceType !== "sheet") throw new Error("该飞书链接不是电子表格或多维表格。");
+    const sheetId = await chooseSheet(token, target.token, target.sheetId || "");
+    const matrix = await readSheetValuesFlexible(token, target.token, sheetId);
+    return { ok: true, source: "飞书电子表格", matrix };
+  }
+  const response = await fetch(googleSheetCsvUrl(cleanUrl), { redirect: "follow" });
+  if (!response.ok) throw new Error(`在线表格读取失败：HTTP ${response.status}`);
+  const contentType = response.headers.get("content-type") || "";
+  if (/spreadsheetml|application\/zip|octet-stream/i.test(contentType)) {
+    throw new Error("在线地址返回的是 XLSX 文件，请先下载后使用“导入表格”。在线导入支持公开 CSV 和 Google Sheets。");
+  }
+  return { ok: true, source: parsedUrl.hostname === "docs.google.com" ? "Google Sheets" : "公开 CSV", csv: await response.text() };
 }
 
 function bitableRecordToDetailItem(record) {
@@ -2797,7 +2870,7 @@ async function syncRowsToFeishu({ rows, options }) {
   }
   const beforeValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
   const beforeRowCount = nonEmptyDataRowCount(beforeValues);
-  const shape = await ensureMappedSheetShape(token, parsed.token, sheetId, beforeValues, rows);
+  const shape = await ensureMappedSheetShape(token, parsed.token, sheetId, beforeValues, rows, options);
   const latestValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
   const latestShape = detectSheetShape(latestValues);
   const sheetItems = sheetRowsToShapeObjects(latestValues, latestShape).filter((item) => Object.values(item.row || {}).some(nonEmptyCell));
@@ -2890,6 +2963,54 @@ async function resolveFeishuSheet(options, rows) {
   return { token, spreadsheetToken: parsed.token, sheetId, fields };
 }
 
+function collectionRequirementsForFields(fields = []) {
+  const detailFieldSet = new Set(DETAIL_FIELDS);
+  const detectedDetailFields = [];
+  let captureFansScreenshot = false;
+  let captureNoteScreenshot = false;
+
+  for (const field of fields) {
+    const fieldName = String(field?.fieldName || field?.name || "").trim();
+    const canonicalField = String(field?.canonicalField || canonicalFieldForHeader(fieldName) || "").trim();
+    const normalizedName = normalizeKey(fieldName);
+    const isFansScreenshot = canonicalField === DETAIL_FIELDS[6] || (normalizedName.includes("粉丝画像") && normalizedName.includes("截图"));
+    const isNoteScreenshot = canonicalField === DETAIL_FIELDS[7] || (normalizedName.includes("笔记数据") && normalizedName.includes("截图"));
+    if (isFansScreenshot) captureFansScreenshot = true;
+    if (isNoteScreenshot) captureNoteScreenshot = true;
+    if (!detailFieldSet.has(canonicalField) && !isFansScreenshot && !isNoteScreenshot) continue;
+    const detectedName = canonicalField || (isFansScreenshot ? DETAIL_FIELDS[6] : DETAIL_FIELDS[7]);
+    if (!detectedDetailFields.includes(detectedName)) detectedDetailFields.push(detectedName);
+  }
+
+  return {
+    collectionMode: detectedDetailFields.length ? "detail" : "fast",
+    detectedDetailFields,
+    detailCaptureFansScreenshot: captureFansScreenshot,
+    detailCaptureNoteScreenshot: captureNoteScreenshot
+  };
+}
+
+function collectionRequirementsForSheetValues(values) {
+  if (!effectiveSheetWidth(values)) {
+    return {
+      collectionMode: "fast",
+      detectedDetailFields: [],
+      detailCaptureFansScreenshot: false,
+      detailCaptureNoteScreenshot: false
+    };
+  }
+  return collectionRequirementsForFields(detectSheetShape(values).columns);
+}
+
+function applyCollectionRequirements(options, requirements = {}) {
+  return {
+    ...(options || {}),
+    collectionMode: requirements.collectionMode === "detail" ? "detail" : "fast",
+    detailCaptureFansScreenshot: Boolean(requirements.detailCaptureFansScreenshot),
+    detailCaptureNoteScreenshot: Boolean(requirements.detailCaptureNoteScreenshot)
+  };
+}
+
 async function validateFeishuSyncTarget(options) {
   const appId = options.feishuAppId;
   const appSecret = options.feishuAppSecret;
@@ -2916,8 +3037,11 @@ async function validateFeishuSyncTarget(options) {
     const tableId = preferredTableId
       ? await chooseBitableTable(token, parsed.token, preferredTableId)
       : (tables[0]?.table_id || tables[0]?.id);
-    await listBitableFields(token, parsed.token, tableId);
-    return { ok: true, resourceType: "bitable", tableId, tableCount: tables.length };
+    const fields = await listBitableFields(token, parsed.token, tableId);
+    const collectionRequirements = collectionRequirementsForFields(fields.map((field) => ({
+      fieldName: bitableFieldName(field)
+    })));
+    return { ok: true, resourceType: "bitable", tableId, tableCount: tables.length, ...collectionRequirements };
   }
   if (parsed.resourceType !== "sheet") throw new Error("同步达人当前仅支持飞书电子表格或多维表格。");
   const sheets = await listSheets(token, parsed.token);
@@ -2938,8 +3062,9 @@ async function validateFeishuSyncTarget(options) {
   const sheetId = preferredSheetId
     ? await chooseSheet(token, parsed.token, preferredSheetId)
     : (sheets[0]?.sheet_id || sheets[0]?.id);
-  await readSheetFields(token, parsed.token, sheetId);
-  return { ok: true, resourceType: "sheet", sheetId, sheetCount: sheets.length };
+  const values = await readSheetValues(token, parsed.token, sheetId, "A1:ZZ20");
+  const collectionRequirements = collectionRequirementsForSheetValues(values);
+  return { ok: true, resourceType: "sheet", sheetId, sheetCount: sheets.length, ...collectionRequirements };
 }
 
 async function validateFeishuCredentials(options) {
@@ -3292,7 +3417,9 @@ function mergeDetailApiCache(detail, apiCache) {
   const fan = raw.fan_analysis && typeof raw.fan_analysis === "object" ? { ...raw.fan_analysis } : {};
   const note = raw.note_performance && typeof raw.note_performance === "object" ? { ...raw.note_performance } : {};
   const service = raw.service_performance && typeof raw.service_performance === "object" ? { ...raw.service_performance } : {};
-  const profile = cache.blogger_profile && typeof cache.blogger_profile === "object" ? cache.blogger_profile : {};
+  const detailProfile = cache.blogger_profile && typeof cache.blogger_profile === "object" ? cache.blogger_profile : {};
+  const listProfile = cache.blogger_list_profile && typeof cache.blogger_list_profile === "object" ? cache.blogger_list_profile : {};
+  const profile = { ...detailProfile, ...listProfile };
   const fansSummary = cache.fans_summary && typeof cache.fans_summary === "object" ? cache.fans_summary : {};
   const fansProfile = cache.fans_profile && typeof cache.fans_profile === "object" ? cache.fans_profile : {};
   const dailySummary = cache.data_summary?.daily && typeof cache.data_summary.daily === "object" ? cache.data_summary.daily : {};
@@ -3312,17 +3439,22 @@ function mergeDetailApiCache(detail, apiCache) {
   if (profile.likeCollectCountInfo !== undefined && !result.liked_collected_count) result.liked_collected_count = numericValue(profile.likeCollectCountInfo);
   if (profile.picturePrice !== undefined && !result.quote_price) result.quote_price = numericValue(profile.picturePrice);
   if (profile.videoPrice !== undefined && !result.video_quote_price) result.video_quote_price = numericValue(profile.videoPrice);
+  if (dailyRate.noteType !== undefined && !result.note_type) result.note_type = dailyRate.noteType;
+  if (profile.contentTags !== undefined && !result.contentTags) result.contentTags = profile.contentTags;
 
   if (dailySummary.readMedian !== undefined && !result.daily_read_median) result.daily_read_median = numericValue(dailySummary.readMedian);
   if (dailySummary.mAccumImpNum !== undefined && !result.daily_exposure_median) result.daily_exposure_median = numericValue(dailySummary.mAccumImpNum);
   if ((dailySummary.mEngagementNum || dailySummary.interactionMedian) !== undefined && !result.daily_interaction_median) {
     result.daily_interaction_median = numericValue(dailySummary.mEngagementNum || dailySummary.interactionMedian);
   }
-  if (coopSummary.readMedian !== undefined && !result.cooperation_read_median) result.cooperation_read_median = numericValue(coopSummary.readMedian);
-  if (coopSummary.mAccumImpNum !== undefined && !result.cooperation_exposure_median) result.cooperation_exposure_median = numericValue(coopSummary.mAccumImpNum);
-  if ((coopSummary.mEngagementNum || coopSummary.interactionMedian) !== undefined && !result.cooperation_interaction_median) {
-    result.cooperation_interaction_median = numericValue(coopSummary.mEngagementNum || coopSummary.interactionMedian);
-  }
+  const cooperationReadMedian = firstDefined(coopRate.readMedian, coopSummary.readMedian, coopRate.readMidCoop30, listProfile.readMidCoop30, profile.readMidCoop30);
+  if (cooperationReadMedian !== undefined && !result.cooperation_read_median) result.cooperation_read_median = numericValue(cooperationReadMedian);
+  const cooperationExposureMedian = firstDefined(coopRate.impMedian, coopSummary.mAccumImpNum, coopRate.mAccumImpNum, coopRate.accumCoopImpMedinNum30d, listProfile.accumCoopImpMedinNum30d, profile.accumCoopImpMedinNum30d);
+  if (cooperationExposureMedian !== undefined && !result.cooperation_exposure_median) result.cooperation_exposure_median = numericValue(cooperationExposureMedian);
+  const cooperationInteractionMedian = firstDefined(coopRate.interactionMedian, coopSummary.interactionMedian, coopSummary.mEngagementNum, coopRate.interMidCoop30, listProfile.interMidCoop30, profile.interMidCoop30);
+  if (cooperationInteractionMedian !== undefined && !result.cooperation_interaction_median) result.cooperation_interaction_median = numericValue(cooperationInteractionMedian);
+  const cooperationNoteCount = firstDefined(profile.businessNoteCount, profile.cooperationNoteCount, profile.coopNoteNum30d, coopSummary.noteNumber, coopRate.noteNumber);
+  if (cooperationNoteCount !== undefined && !result.cooperation_note_count) result.cooperation_note_count = numericValue(cooperationNoteCount);
   if (dailySummary.responseRate !== undefined && !result.reply_rate_48h) result.reply_rate_48h = ratioFromApiValue(dailySummary.responseRate);
   if (dailySummary.activeDayInLast7 !== undefined && !result.active_days_7d) result.active_days_7d = numericValue(dailySummary.activeDayInLast7);
 
@@ -4050,7 +4182,57 @@ async function fetchFastDetailApiCacheFromTab(tabId, userId) {
     },
     args: [requests]
   });
-  return result?.result || { ok: false, cache: {}, responses: [] };
+  const apiCache = result?.result || { ok: false, cache: {}, responses: [] };
+  const profile = apiCache?.cache?.blogger_profile || {};
+  const listProfile = await fetchBloggerListProfileFromTab(tabId, userId, profile.name || profile.nickName || profile.nickname || "").catch(() => null);
+  if (listProfile) {
+    apiCache.cache = apiCache.cache || {};
+    apiCache.cache.blogger_list_profile = listProfile;
+  }
+  return apiCache;
+}
+
+async function fetchBloggerListProfileFromTab(tabId, userId, nickname = "") {
+  if (!tabId || !userId) return null;
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    world: "MAIN",
+    func: async (targetUserId, targetNickname) => {
+      const keyword = String(targetNickname || targetUserId || "").trim();
+      if (!keyword) return null;
+      const request = async (path, body) => {
+        const response = await fetch(path, {
+          method: "POST",
+          credentials: "include",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body)
+        });
+        if (!response.ok) return null;
+        const payload = await response.json().catch(() => null);
+        return payload?.data || payload || null;
+      };
+      const track = await request("/api/solar/cooperator/blogger/track", { searchType: 0, keyword });
+      const data = await request("/api/solar/cooperator/blogger/v2", {
+        searchType: 0,
+        keyword,
+        column: "comprehensiverank",
+        sort: "desc",
+        pageNum: 1,
+        pageSize: 20,
+        trackId: track?.trackId || "",
+        signed: -1,
+        noteType: 0,
+        tradeType: "不限",
+        inStar: 0,
+        flagList: [],
+        filterList: []
+      });
+      const rows = Array.isArray(data?.kols) ? data.kols : [];
+      return rows.find((item) => String(item?.userId || "") === String(targetUserId)) || null;
+    },
+    args: [userId, nickname]
+  });
+  return result?.result || null;
 }
 
 function priceTextFromPgyValue(value) {
@@ -4097,6 +4279,7 @@ function preFavoriteCategoryTags(profile = {}) {
 
 function preFavoritePatchFromApiCache(userId, apiCache) {
   const profile = apiCache?.cache?.blogger_profile || {};
+  const detail = mergeDetailApiCache({ pgy_blogger_id: userId }, apiCache);
   const redId = cleanJsonText(firstDefined(profile.redId, profile.red_id, profile.redID, profile.redBookId, profile.redbookId, profile.red_book_id, profile.xiaohongshuId, profile.xiaohongshu_id));
   const categoryTags = preFavoriteCategoryTags(profile);
   const patch = {
@@ -4120,6 +4303,14 @@ function preFavoritePatchFromApiCache(userId, apiCache) {
   if (picturePriceText) patch.picturePriceText = picturePriceText;
   const videoPriceText = priceTextFromPgyValue(firstDefined(profile.videoPrice, profile.videoQuotePrice));
   if (videoPriceText) patch.videoPriceText = videoPriceText;
+  const cooperationExposureMedian = numericValue(detail.cooperation_exposure_median);
+  if (cooperationExposureMedian !== "") patch.cooperationExposureMedian = cooperationExposureMedian;
+  const cooperationReadMedian = numericValue(detail.cooperation_read_median);
+  if (cooperationReadMedian !== "") patch.cooperationReadMedian = cooperationReadMedian;
+  const cooperationInteractionMedian = numericValue(detail.cooperation_interaction_median);
+  if (cooperationInteractionMedian !== "") patch.cooperationInteractionMedian = cooperationInteractionMedian;
+  const cooperationNoteCount = numericValue(detail.cooperation_note_count);
+  if (cooperationNoteCount !== "") patch.cooperationNoteCount = cooperationNoteCount;
   if (!picturePriceText && !videoPriceText) patch.quoteStatus = "报价未返回";
   return patch;
 }
@@ -4148,6 +4339,74 @@ async function enrichPreFavoriteQuote({ userId }) {
   const next = favorites.map((item) => item?.userId === cleanUserId ? { ...item, ...patch } : item);
   await chrome.storage.local.set({ pgyPreFavorites: next });
   return { ok: true, patch };
+}
+
+async function refreshAllPreFavorites({ userIds = [] } = {}) {
+  const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+  let favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
+  const requestedIds = new Set((Array.isArray(userIds) && userIds.length ? userIds : favorites.map((item) => item?.userId))
+    .map(cleanPgyUserId)
+    .filter(Boolean));
+  const targets = favorites.filter((item) => requestedIds.has(cleanPgyUserId(item?.userId)));
+  if (!targets.length) throw new Error("达人库暂无可更新的数据。");
+  let tab = await findPgyContextTab();
+  let createdTabId = 0;
+  if (!tab?.id) {
+    tab = await chrome.tabs.create({ url: detailUrl(cleanPgyUserId(targets[0].userId)), active: false });
+    createdTabId = tab.id || 0;
+    if (createdTabId) await waitForTabComplete(createdTabId, 20000).catch(() => null);
+  }
+  if (!tab?.id) throw new Error("无法打开蒲公英上下文页面。");
+  let completed = 0;
+  let failed = 0;
+  const errorSamples = [];
+  const startedAt = new Date().toISOString();
+  try {
+    for (const target of targets) {
+      const userId = cleanPgyUserId(target.userId);
+      const currentName = target.name || userId;
+      await chrome.storage.local.set({
+        pgyPreFavoriteRefreshProgress: {
+          running: true,
+          total: targets.length,
+          completed,
+          failed,
+          currentUserId: userId,
+          currentName,
+          startedAt
+        }
+      });
+      try {
+        const apiCache = await fetchFastDetailApiCacheFromTab(tab.id, userId);
+        if (!apiCache?.ok) throw new Error(apiCache?.message || "蒲公英接口未返回达人数据");
+        const patch = preFavoritePatchFromApiCache(userId, apiCache);
+        favorites = favorites.map((item) => cleanPgyUserId(item?.userId) === userId ? { ...item, ...patch } : item);
+        completed += 1;
+      } catch (error) {
+        const message = shortErrorMessage(error);
+        favorites = favorites.map((item) => cleanPgyUserId(item?.userId) === userId
+          ? { ...item, quoteStatus: `更新失败：${message}`, lastRefreshFailedAt: new Date().toISOString() }
+          : item);
+        failed += 1;
+        if (errorSamples.length < 5) errorSamples.push({ userId, name: currentName, message });
+      }
+      await chrome.storage.local.set({ pgyPreFavorites: favorites });
+      if (completed + failed < targets.length) await sleep(350);
+    }
+  } finally {
+    if (createdTabId) chrome.tabs.remove(createdTabId).catch(() => null);
+    await chrome.storage.local.set({
+      pgyPreFavoriteRefreshProgress: {
+        running: false,
+        total: targets.length,
+        completed,
+        failed,
+        finishedAt: new Date().toISOString(),
+        startedAt
+      }
+    });
+  }
+  return { ok: true, total: targets.length, completed, failed, errorSamples };
 }
 
 async function detailDomCacheForUser(userId) {
@@ -4280,6 +4539,17 @@ async function collectDetailPayloadFromTab(tab, row, index, url, options = {}) {
     message: error?.message || String(error)
   }));
   const apiCache = await readDetailApiCache(tab.id);
+  const currentUserId = extractPgyUserId(row);
+  const currentProfile = apiCache?.cache?.blogger_profile || {};
+  const listProfile = await fetchBloggerListProfileFromTab(
+    tab.id,
+    currentUserId,
+    currentProfile.name || result.detail?.nickname || ""
+  ).catch(() => null);
+  if (listProfile) {
+    apiCache.cache = apiCache.cache || {};
+    apiCache.cache.blogger_list_profile = listProfile;
+  }
   const audience = shouldCaptureFansScreenshot(options)
     ? await capturePreparedTab(tab, "audience", row, index)
     : skippedAudienceCapture();
@@ -4380,8 +4650,8 @@ async function collectDetailPayloadFromBackgroundTab(url, index = 0, options = {
 async function collectCurrentDetailPayload(tab, index = 0, options = {}) {
   if (!tab?.id) throw new Error("无法定位当前达人详情页。");
   const url = tab.url || "";
-  rowFromDetailUrl(url);
-  return collectDetailPayloadFromBackgroundTab(url, index, options);
+  const row = rowFromDetailUrl(url);
+  return collectDetailPayloadWithCooldown(row, index, options);
 }
 
 function detailFavoriteOptions(options) {
@@ -4555,20 +4825,25 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
   const appSecret = mergedOptions.feishuAppSecret;
   const feishuUrl = mergedOptions.detailFeishuUrl;
   if (!appId || !appSecret || !feishuUrl) throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
-  const payload = await collectCurrentDetailPayload(tab, 0, mergedOptions);
   const token = await tenantToken(appId, appSecret);
   const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
   if (parsed.resourceType === "bitable") {
-    return appendDetailPayloadToBitable({ token, parsed, options: mergedOptions }, payload);
+    const tableId = await chooseBitableTable(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.tableId || "");
+    const requirements = collectionRequirementsForFields((await listBitableFields(token, parsed.token, tableId)).map((field) => ({
+      fieldName: bitableFieldName(field)
+    })));
+    const targetOptions = applyCollectionRequirements({ ...mergedOptions, detailFeishuSheetId: tableId }, requirements);
+    const payload = await collectCurrentDetailPayload(tab, 0, targetOptions);
+    return appendDetailPayloadToBitable({ token, parsed, options: targetOptions }, payload);
   }
   if (parsed.resourceType !== "sheet") throw new Error("收藏写回当前支持飞书电子表格或多维表格。");
   const sheetId = await chooseSheet(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.sheetId || "");
+  const requirements = collectionRequirementsForSheetValues(await readSheetValues(token, parsed.token, sheetId, "A1:ZZ20"));
+  const payload = await collectCurrentDetailPayload(tab, 0, applyCollectionRequirements(mergedOptions, requirements));
   return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
 }
 
-async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
-  if (!tab?.id) throw new Error("无法定位当前达人详情页。");
-  const url = tab.url || "";
+async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 }) {
   rowFromDetailUrl(url);
   const saved = await chrome.storage.local.get({
     feishuAppId: "",
@@ -4580,12 +4855,20 @@ async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
     throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
   }
   const userId = (url.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
-  const task = favoriteCurrentDetailToFeishu({ tab: { id: tab.id, url }, options: mergedOptions })
+  const task = favoriteCurrentDetailToFeishu({ tab: { id: -1, url }, options: mergedOptions })
     .then((result) => {
       notifyDetailBackfill(
         "收藏写回完成",
         `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
       );
+      if (sourceTabId) {
+        chrome.tabs.sendMessage(sourceTabId, {
+          type: "PGY_FAVORITE_TASK_STATUS",
+          status: "completed",
+          userId,
+          result
+        }).catch(() => null);
+      }
       return result;
     })
     .catch((error) => {
@@ -4594,10 +4877,23 @@ async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
         shortErrorMessage(error),
         { requireInteraction: true }
       );
+      if (sourceTabId) {
+        chrome.tabs.sendMessage(sourceTabId, {
+          type: "PGY_FAVORITE_TASK_STATUS",
+          status: "failed",
+          userId,
+          message: shortErrorMessage(error)
+        }).catch(() => null);
+      }
       throw error;
     });
   task.catch(() => null);
   return { ok: true, accepted: true, userId, detailUrl: url };
+}
+
+async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
+  if (!tab?.id) throw new Error("无法定位当前达人详情页。");
+  return startFavoriteDetailToFeishu({ url: tab.url || "", options, sourceTabId: tab.id });
 }
 
 function shouldUseDetailCollection(options = {}) {
@@ -4732,6 +5028,7 @@ async function resolveExistingFeishuSheet(options) {
 async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
   const values = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
   const shape = detectSheetShape(values);
+  const collectionOptions = applyCollectionRequirements(sheet.options, collectionRequirementsForFields(shape.columns));
   const allItems = sheetRowsToShapeObjects(values, shape);
   const templateItem = firstValidCreatorItem(allItems);
   const rows = allItems.filter((item) => {
@@ -4766,7 +5063,7 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
   try {
     await runDetailBackfillPool(targetRows, async (item, index) => {
     try {
-      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, sheet.options || {});
+      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, collectionOptions);
       const valuesByField = canonicalBackfillValues(item.row, payload);
       const captures = payload.captures || {};
       const rowWarnings = [captures.audience?.error, captures.overview?.error].filter(Boolean);
@@ -4917,7 +5214,7 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
         });
       }
     }
-    }, detailBackfillConcurrencyForOptions(sheet.options || {}));
+    }, detailBackfillConcurrencyForOptions(collectionOptions));
   } finally {
     await closeReusableDetailTab();
   }
@@ -4942,10 +5239,14 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
 
 async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
   const records = await readBitableRecords(table.token, table.appToken, table.tableId);
+  const existingFields = await listBitableFields(table.token, table.appToken, table.tableId);
+  const collectionOptions = applyCollectionRequirements(table.options, collectionRequirementsForFields(existingFields.map((field) => ({
+    fieldName: bitableFieldName(field)
+  }))));
   const fieldsMeta = await ensureBitableDetailFields(table.token, table.appToken, table.tableId, records);
   const rows = records
     .map(bitableRecordToDetailItem)
-    .filter((item) => bitableNeedsDetail(item, fieldsMeta, table.options || {}));
+    .filter((item) => bitableNeedsDetail(item, fieldsMeta, collectionOptions));
   const maxRows = Number(limit || rows.length);
   const targetRows = rows.slice(0, Math.max(0, Math.min(maxRows, rows.length)));
   let completed = 0;
@@ -4957,7 +5258,7 @@ async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
   try {
     await runDetailBackfillPool(targetRows, async (item, index) => {
     try {
-      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, table.options || {});
+      const payload = await collectDetailPayloadWithCooldown(item.row, offset + index, collectionOptions);
       const valuesByField = canonicalBackfillValues(item.row, payload);
       const captures = payload.captures || {};
       const missingScreenshots = [];
@@ -4985,7 +5286,7 @@ async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
         "详情补采备注": error?.message || String(error)
       }).catch(() => null);
     }
-    }, detailBackfillConcurrencyForOptions(table.options || {}));
+    }, detailBackfillConcurrencyForOptions(collectionOptions));
   } finally {
     await closeReusableDetailTab();
   }
@@ -5165,6 +5466,25 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   (async () => {
+    if (message?.type === "DOWNLOAD_FAVORITES_XLSX") {
+      const rows = Array.isArray(message.rows) ? message.rows : [];
+      const workbook = rowsToSimpleXlsx(rows, "达人库");
+      const blob = new Blob([workbook], {
+        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      });
+      const url = URL.createObjectURL(blob);
+      try {
+        const downloadId = await chrome.downloads.download({
+          url,
+          filename: message.filename || `达人库-${rows.length}人.xlsx`,
+          saveAs: true
+        });
+        sendResponse({ ok: true, downloadId });
+      } finally {
+        setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      }
+      return;
+    }
     if (message?.type === "DOWNLOAD_PGY_XLSX") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
       const workbook = rowsToXlsx(rows);
@@ -5238,8 +5558,27 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse(result);
       return;
     }
+    if (message?.type === "FAVORITE_DETAIL_URL") {
+      const result = await startFavoriteDetailToFeishu({
+        url: message.detailUrl || "",
+        options: message.options || {},
+        sourceTabId: sender?.tab?.id || 0
+      });
+      sendResponse(result);
+      return;
+    }
     if (message?.type === "ENRICH_PREFAVORITE_QUOTE") {
       const result = await enrichPreFavoriteQuote({ userId: message.userId || "" });
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "REFRESH_ALL_PREFAVORITES") {
+      const result = await refreshAllPreFavorites({ userIds: message.userIds || [] });
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "READ_ONLINE_CREATOR_TABLE") {
+      const result = await readOnlineCreatorTable(message.url || "");
       sendResponse(result);
       return;
     }

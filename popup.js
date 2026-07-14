@@ -55,6 +55,7 @@ const detailValidateBtn = document.getElementById("detailValidateBtn");
 const detailHint = document.getElementById("detailHint");
 const detailConfiguredTable = document.getElementById("detailConfiguredTable");
 const refreshConfiguredTablesBtn = document.getElementById("refreshConfiguredTablesBtn");
+const activeDetailTable = document.getElementById("activeDetailTable");
 const FEISHU_PERMISSION_HINT = "请检查权限，设为所有人可编辑";
 
 let importedRows = [];
@@ -91,6 +92,20 @@ function configuredTableValue(config) {
   return `${config.url}\n${config.sheetId || ""}`;
 }
 
+function activeDetailTableLabel(config) {
+  if (!config) return "暂无已配置表格";
+  const index = configuredTables.indexOf(config);
+  return tableConfigLabel(config, Math.max(index, 0));
+}
+
+function updateActiveDetailTable(config) {
+  const label = activeDetailTableLabel(config);
+  activeDetailTable.textContent = `当前生效：${label}`;
+  activeDetailTable.title = config
+    ? `${label}\n${config.url}${config.sheetId ? `\n子表 ID：${config.sheetId}` : ""}`
+    : "";
+}
+
 function findConfiguredTableByFields(url, sheetId) {
   const normalizedUrl = String(url || "").trim();
   const normalizedSheetId = String(sheetId || "").trim();
@@ -119,6 +134,7 @@ function renderConfiguredTableOptions(options) {
   detailConfiguredTable.value = selected ? configuredTableValue(selected) : "";
   fields.detailFeishuUrl.value = selected?.url || "";
   fields.detailFeishuSheetId.value = selected?.sheetId || "";
+  updateActiveDetailTable(selected);
   return selected;
 }
 
@@ -127,15 +143,22 @@ function syncConfiguredTableSelectionFromFields() {
   detailConfiguredTable.value = selectedIndex >= 0 ? configuredTableValue(configuredTables[selectedIndex]) : "";
 }
 
-function applyConfiguredDetailTable() {
+async function applyConfiguredDetailTable({ confirmed = false } = {}) {
   const selected = configuredTables.find((config) => configuredTableValue(config) === detailConfiguredTable.value);
   fields.detailFeishuUrl.value = selected?.url || "";
   fields.detailFeishuSheetId.value = selected?.sheetId || "";
+  updateActiveDetailTable(selected);
   detailMultiSheetAvailable = false;
   detailTraverseAllSheets.checked = false;
   updateCapabilityState();
   if (!selected) return;
-  saveOptions().then(() => setStatus(`已选择详情表：${selected.name || "未命名表格"}。`)).catch((error) => setStatus(error.message, true));
+  await saveOptions();
+  const active = configuredTables.find((config) => (
+    config.url === fields.detailFeishuUrl.value.trim()
+    && (config.sheetId || "") === fields.detailFeishuSheetId.value.trim()
+  )) || selected;
+  updateActiveDetailTable(active);
+  setStatus(`${confirmed ? "已确认" : "已切换"}详情补全表：${activeDetailTableLabel(active)}。`);
 }
 
 async function refreshConfiguredTables({ announce = true } = {}) {
@@ -225,9 +248,8 @@ function detailReadinessMessage(options = currentOptions()) {
 }
 
 function collectionModeHint(options = currentOptions()) {
-  return options.collectionMode === "detail"
-    ? "当前模式：全采集，会补采达人详情。"
-    : "当前模式：快速采集，仅抓列表数据。";
+  const exportMode = options.collectionMode === "detail" ? "全采集" : "快速采集";
+  return `写入前会按目标表字段自动选择模式；纯导出默认${exportMode}。`;
 }
 
 async function applyFullCollectionDefault(options) {
@@ -283,7 +305,7 @@ function updateCapabilityState() {
   syncUseFirstSheet.disabled = !syncOk || !syncMultiSheetAvailable || Boolean(options.feishuSheetId);
   if (syncUseFirstSheet.disabled) syncUseFirstSheet.checked = false;
   backfillBtn.disabled = !detailOk;
-  detailValidateBtn.disabled = !detailOk;
+  detailValidateBtn.disabled = detailConfiguredTable.disabled || !detailConfiguredTable.value;
   detailTraverseAllSheets.disabled = !detailOk || !detailMultiSheetAvailable || Boolean(options.detailFeishuSheetId);
   if (detailTraverseAllSheets.disabled) detailTraverseAllSheets.checked = false;
 
@@ -300,7 +322,7 @@ function updateCapabilityState() {
         : "直接从当前蒲公英筛选条件采集并写入飞书。";
   }
 
-  const modeHint = `${collectionModeHint(options)}可在配置页调整。`;
+  const modeHint = collectionModeHint(options);
 
   if (!detailOk) {
     detailHint.textContent = `${modeHint}${detailReadinessMessage(options)}`;
@@ -498,7 +520,13 @@ async function validateSyncTarget() {
   if (result.requiresMultiSheetChoice && !options.syncUseFirstSheet) {
     throw new Error(`检测到 ${result.sheetCount || result.tableCount} 个子表。请填写同步子表 ID，或勾选“使用首个子表”。`);
   }
-  return options;
+  return {
+    ...options,
+    collectionMode: result.collectionMode === "detail" ? "detail" : "fast",
+    detailCaptureFansScreenshot: Boolean(result.detailCaptureFansScreenshot),
+    detailCaptureNoteScreenshot: Boolean(result.detailCaptureNoteScreenshot),
+    detectedDetailFields: Array.isArray(result.detectedDetailFields) ? result.detectedDetailFields : []
+  };
 }
 
 async function validateSyncTargetStatus() {
@@ -693,7 +721,7 @@ for (const input of Object.values(fields)) {
   });
 }
 
-detailConfiguredTable.addEventListener("change", applyConfiguredDetailTable);
+detailConfiguredTable.addEventListener("change", () => applyConfiguredDetailTable().catch((error) => setStatus(error.message, true)));
 refreshConfiguredTablesBtn.addEventListener("click", () => refreshConfiguredTables().catch((error) => setStatus(error.message, true)));
 
 chrome.storage.onChanged.addListener((changes, areaName) => {
@@ -731,12 +759,15 @@ function describeSyncValidation(result) {
   if (result?.requiresMultiSheetChoice) {
     return `检测到 ${result.sheetCount || result.tableCount} 个子表，请填写同步子表 ID，或勾选“使用首个子表”。`;
   }
-  if (result?.resourceType === "bitable") return `同步目标可写，多维表格 ${result.tableId || "-"}。`;
-  if (result?.sheetCount > 1) return `同步目标可写，已选择电子表格子表 ${result?.sheetId || "-"}。`;
-  return `同步目标可写，电子表格子表 ${result?.sheetId || "-"}。`;
+  const modeText = result?.collectionMode === "detail"
+    ? `已自动选择全采集${result.detailCaptureFansScreenshot || result.detailCaptureNoteScreenshot ? "并开启目标表需要的截图" : ""}`
+    : "已自动选择快速采集";
+  if (result?.resourceType === "bitable") return `同步目标可写，多维表格 ${result.tableId || "-"}；${modeText}。`;
+  if (result?.sheetCount > 1) return `同步目标可写，已选择电子表格子表 ${result?.sheetId || "-"}；${modeText}。`;
+  return `同步目标可写，电子表格子表 ${result?.sheetId || "-"}；${modeText}。`;
 }
 
-detailValidateBtn.addEventListener("click", () => validateDetailTarget().then(({ result }) => setStatus(describeDetailValidation(result))).catch((error) => setStatus(error.message, true)));
+detailValidateBtn.addEventListener("click", () => applyConfiguredDetailTable({ confirmed: true }).catch((error) => setStatus(error.message, true)));
 backfillBtn.addEventListener("click", () => backfillDetails().catch((error) => setStatus(error.message, true)));
 document.getElementById("stopDetailBtn").addEventListener("click", () => stopDetail().catch((error) => setStatus(error.message, true)));
 document.getElementById("saveBtn").addEventListener("click", () => saveOptions().then(() => setStatus("配置已保存。")).catch((error) => setStatus(error.message, true)));

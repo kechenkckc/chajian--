@@ -593,8 +593,11 @@
   function updateInviteActionState() {
     const modal = document.getElementById("pgy-invite-modal");
     if (!modal) return;
+    const isFormReady = inviteFormComplete();
     const buildButton = modal.querySelector('[data-action="build-draft"]');
-    if (buildButton) buildButton.disabled = inviteState.loading || !inviteFormComplete();
+    if (buildButton) buildButton.disabled = inviteState.loading || !isFormReady;
+    const submitButton = modal.querySelector('[data-action="submit-real-invite"]');
+    if (submitButton) submitButton.disabled = inviteState.loading || !isFormReady;
     const message = modal.querySelector(".pgy-invite-message");
     if (message && (inviteState.draft || inviteState.submitResult)) {
       inviteState.draft = null;
