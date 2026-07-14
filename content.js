@@ -795,9 +795,86 @@
     panel.style.display = "";
     panel.style.visibility = "visible";
     panel.style.opacity = "1";
+    clampPanelToViewport(panel);
     panel.classList.add("pgy-exporter-repaint");
     panel.getBoundingClientRect();
     requestAnimationFrame(() => panel.classList.remove("pgy-exporter-repaint"));
+  }
+
+  function clampPanelToViewport(panel) {
+    if (!panel || !panel.style.left) return;
+    const gap = 8;
+    const rect = panel.getBoundingClientRect();
+    const maxLeft = Math.max(gap, window.innerWidth - rect.width - gap);
+    const maxTop = Math.max(gap, window.innerHeight - rect.height - gap);
+    panel.style.left = `${Math.min(Math.max(rect.left, gap), maxLeft)}px`;
+    panel.style.top = `${Math.min(Math.max(rect.top, gap), maxTop)}px`;
+  }
+
+  function setPanelCollapsed(panel, collapsed) {
+    panel.classList.toggle("is-collapsed", collapsed);
+    const button = panel.querySelector('[data-action="collapse"]');
+    if (button) button.textContent = collapsed ? "+" : "-";
+    if (collapsed) {
+      panel.setAttribute("role", "button");
+      panel.tabIndex = 0;
+    } else {
+      panel.removeAttribute("role");
+      panel.removeAttribute("tabindex");
+    }
+    requestAnimationFrame(() => clampPanelToViewport(panel));
+  }
+
+  function enablePanelDrag(panel) {
+    const handle = panel.querySelector(".pgy-exporter-head");
+    if (!handle) return;
+    let dragState = null;
+
+    handle.addEventListener("pointerdown", (event) => {
+      if (event.button !== 0 || event.target.closest("button")) return;
+      const rect = panel.getBoundingClientRect();
+      dragState = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        left: rect.left,
+        top: rect.top,
+        moved: false
+      };
+      panel.style.left = `${rect.left}px`;
+      panel.style.top = `${rect.top}px`;
+      panel.style.right = "auto";
+      panel.style.bottom = "auto";
+      panel.classList.add("is-dragging");
+      handle.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    });
+
+    handle.addEventListener("pointermove", (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      const deltaX = event.clientX - dragState.startX;
+      const deltaY = event.clientY - dragState.startY;
+      if (Math.abs(deltaX) + Math.abs(deltaY) > 3) dragState.moved = true;
+      const gap = 8;
+      const maxLeft = Math.max(gap, window.innerWidth - panel.offsetWidth - gap);
+      const maxTop = Math.max(gap, window.innerHeight - panel.offsetHeight - gap);
+      panel.style.left = `${Math.min(Math.max(dragState.left + deltaX, gap), maxLeft)}px`;
+      panel.style.top = `${Math.min(Math.max(dragState.top + deltaY, gap), maxTop)}px`;
+    });
+
+    const finishDrag = (event) => {
+      if (!dragState || event.pointerId !== dragState.pointerId) return;
+      if (dragState.moved) {
+        panel.__pgyIgnoreClick = true;
+        setTimeout(() => { panel.__pgyIgnoreClick = false; }, 0);
+      }
+      dragState = null;
+      panel.classList.remove("is-dragging");
+      if (handle.hasPointerCapture(event.pointerId)) handle.releasePointerCapture(event.pointerId);
+    };
+
+    handle.addEventListener("pointerup", finishDrag);
+    handle.addEventListener("pointercancel", finishDrag);
   }
 
   function createPanel() {
@@ -832,11 +909,16 @@
       </div>
     `;
     panel.addEventListener("click", async (event) => {
+      if (panel.__pgyIgnoreClick) return;
       const action = event.target?.dataset?.action;
+      if (!action && panel.classList.contains("is-collapsed") && event.target.closest(".pgy-exporter-head")) {
+        setPanelCollapsed(panel, false);
+        return;
+      }
       if (!action) return;
       try {
         if (action === "collapse") {
-          panel.classList.toggle("is-collapsed");
+          setPanelCollapsed(panel, !panel.classList.contains("is-collapsed"));
           return;
         }
         if (action === "export") {
@@ -869,6 +951,12 @@
       event.preventDefault();
       chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" }).then(ensurePanelVisible).catch(() => null);
     });
+    panel.addEventListener("keydown", (event) => {
+      if (!panel.classList.contains("is-collapsed") || !["Enter", " "].includes(event.key)) return;
+      event.preventDefault();
+      setPanelCollapsed(panel, false);
+    });
+    enablePanelDrag(panel);
     (document.body || document.documentElement).appendChild(panel);
   }
 

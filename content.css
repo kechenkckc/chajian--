@@ -29,6 +29,13 @@
   color: #f7ffe9;
   background: linear-gradient(112deg, #173c28 0%, #245d3c 72%, #326d43 100%);
   border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+#pgy-exporter-panel.is-dragging .pgy-exporter-head {
+  cursor: grabbing;
 }
 
 .pgy-exporter-brand {
@@ -275,7 +282,30 @@
 }
 
 #pgy-exporter-panel.is-collapsed {
-  width: 184px;
+  width: 68px;
+  border-radius: 999px;
+}
+
+#pgy-exporter-panel.is-collapsed .pgy-exporter-head {
+  justify-content: center;
+  min-height: 30px;
+  padding: 0 4px;
+  border-bottom: 0;
+}
+
+#pgy-exporter-panel.is-collapsed .pgy-exporter-brand {
+  gap: 0;
+}
+
+#pgy-exporter-panel.is-collapsed .pgy-exporter-brand span {
+  width: 58px;
+  height: 22px;
+  border-radius: 999px;
+}
+
+#pgy-exporter-panel.is-collapsed .pgy-exporter-brand strong,
+#pgy-exporter-panel.is-collapsed .pgy-exporter-head button {
+  display: none;
 }
 
 @keyframes pgy-exporter-pulse {
