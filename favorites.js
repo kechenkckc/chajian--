@@ -10,6 +10,9 @@ const selectedCount = document.getElementById("selectedCount");
 const writeFeishuBtn = document.getElementById("writeFeishuBtn");
 const favoriteConfiguredTable = document.getElementById("favoriteConfiguredTable");
 const activeWriteTarget = document.getElementById("activeWriteTarget");
+const stickyWriteTarget = document.getElementById("stickyWriteTarget");
+const refreshFeishuConfigsBtn = document.getElementById("refreshFeishuConfigsBtn");
+const manageFeishuConfigsBtn = document.getElementById("manageFeishuConfigsBtn");
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
 const categoryFilters = document.getElementById("categoryFilters");
@@ -144,12 +147,15 @@ function activeTableLabel() {
 }
 
 function updateActiveWriteTarget() {
-  activeWriteTarget.textContent = activeTable
-    ? `当前生效：${activeTableLabel()}`
-    : "当前生效：暂无可写入表格";
-  activeWriteTarget.title = activeTable
-    ? `${activeTableLabel()}\n${activeTable.url}${activeTable.sheetId ? `\n子表 ID：${activeTable.sheetId}` : ""}`
+  const label = activeTableLabel();
+  const title = activeTable
+    ? `${label}\n${activeTable.url}${activeTable.sheetId ? `\n子表 ID：${activeTable.sheetId}` : ""}`
     : "";
+  activeWriteTarget.textContent = activeTable ? `当前生效：${label}` : "当前生效：暂无可写入表格";
+  activeWriteTarget.title = title;
+  activeWriteTarget.classList.toggle("is-empty", !activeTable);
+  stickyWriteTarget.textContent = label;
+  stickyWriteTarget.title = title;
 }
 
 async function loadConfiguredTables({ announce = false } = {}) {
@@ -201,6 +207,19 @@ async function applyConfiguredTableSelection() {
   setStatus(activeTable
     ? `选择已生效，预收藏达人将写入：${activeTableLabel()}。`
     : "当前没有可写入的飞书表格。", !activeTable);
+}
+
+async function refreshConfiguredTables() {
+  refreshFeishuConfigsBtn.disabled = true;
+  try {
+    await loadConfiguredTables({ announce: true });
+  } finally {
+    refreshFeishuConfigsBtn.disabled = false;
+  }
+}
+
+async function openFeishuConfigPage() {
+  await chrome.runtime.openOptionsPage();
 }
 
 function setStatus(text, isError = false) {
@@ -480,7 +499,7 @@ async function updateAllFavorites() {
   if (!favorites.length) throw new Error("达人库暂无可更新的数据。");
   setDataBusy(true);
   showDataProgress(`准备更新 ${favorites.length} 位达人...`, 0, favorites.length);
-  setStatus("正在获取所有达人的最新粉丝量、赞藏与报价，请保持蒲公英登录状态。");
+  setStatus("正在获取所有达人的最新头像、粉丝量、赞藏与报价，请保持蒲公英登录状态。");
   try {
     const result = await chrome.runtime.sendMessage({
       type: "REFRESH_ALL_PREFAVORITES",
@@ -743,6 +762,8 @@ writeFeishuBtn.addEventListener("click", () => syncSelectedToFeishu().catch((err
   setStatus(error.message, true);
 }));
 favoriteConfiguredTable.addEventListener("change", () => applyConfiguredTableSelection().catch((error) => setStatus(error.message, true)));
+refreshFeishuConfigsBtn.addEventListener("click", () => refreshConfiguredTables().catch((error) => setStatus(error.message, true)));
+manageFeishuConfigsBtn.addEventListener("click", () => openFeishuConfigPage().catch((error) => setStatus(error.message, true)));
 
 refreshBtn.addEventListener("click", () => loadFavorites().catch((error) => setStatus(error.message, true)));
 clearBtn.addEventListener("click", () => clearFavorites().catch((error) => setStatus(error.message, true)));

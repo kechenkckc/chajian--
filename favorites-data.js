@@ -2,6 +2,7 @@ const FavoriteDataTools = (() => {
   const FIELD_ALIASES = {
     userId: ["达人ID", "博主ID", "达人id", "用户ID", "userId", "creator_id", "蒲公英ID"],
     name: ["达人昵称", "达人名称", "昵称", "博主昵称", "博主名称", "name"],
+    avatar: ["头像", "头像链接", "达人头像", "avatar", "headPhoto"],
     redId: ["小红书号", "红书号", "小红书ID", "redId"],
     location: ["IP城市", "IP属地", "地理位置", "地区", "location"],
     followersText: ["粉丝数", "粉丝数（万）", "粉丝数(万)", "粉丝数w", "粉丝量", "followersText"],
@@ -198,7 +199,7 @@ const FavoriteDataTools = (() => {
     const userId = cleanUserId(pick(values, "userId"), pgyUrl, xhsUrl);
     if (!userId) return null;
     const record = { userId, source: "spreadsheet_import", updatedAt: new Date().toISOString() };
-    for (const field of ["name", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
+    for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
       const value = pick(values, field);
       if (value) record[field] = value;
     }
@@ -243,6 +244,7 @@ const FavoriteDataTools = (() => {
     return {
       "达人ID": item.userId || "",
       "达人昵称": item.name || "",
+      "头像链接": item.avatar || "",
       "小红书号": item.redId || "",
       "IP属地": item.location || "",
       "粉丝数": item.followersText || "",

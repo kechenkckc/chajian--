@@ -827,7 +827,7 @@
           <button type="button" data-action="stop" disabled>停止采集</button>
           <button type="button" data-action="sync">直接采集达人到飞书</button>
           <button type="button" data-action="side-settings">打开侧边栏设置</button>
-          <button type="button" data-action="feishu-settings">打开飞书配置</button>
+          <button type="button" data-action="feishu-settings">打开设置页</button>
         </div>
       </div>
     `;

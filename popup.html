@@ -55,16 +55,18 @@
           <span>选择已下载达人 CSV</span>
           <input id="csvFile" type="file" accept=".csv,.txt,text/csv,text/plain" />
         </label>
-        <div class="split">
+        <div class="configured-table-picker">
           <label>
-            <span>同步达人飞书表格</span>
-            <input id="feishuUrl" type="url" placeholder="https://xxx.feishu.cn/sheets/..." />
+            <span>选择飞书配置页已配置表格</span>
+            <select id="syncConfiguredTable">
+              <option value="">暂无已配置表格</option>
+            </select>
           </label>
-          <label>
-            <span>同步子表 ID</span>
-            <input id="feishuSheetId" type="text" placeholder="多个子表时填写，可留空" />
-          </label>
+          <button id="refreshSyncConfiguredTablesBtn" type="button" class="compact-button">刷新已配置表</button>
         </div>
+        <p id="activeSyncTable" class="active-detail-table">当前生效：暂无已配置表格</p>
+        <input id="feishuUrl" type="hidden" />
+        <input id="feishuSheetId" type="hidden" />
         <div class="check-grid">
           <label class="inline">
             <input id="syncUpdateExisting" type="checkbox" />
@@ -95,6 +97,7 @@
               <option value="">暂无已配置表格</option>
             </select>
           </label>
+          <button id="openTableConfigBtn" type="button" class="compact-button">去配置表格</button>
           <button id="refreshConfiguredTablesBtn" type="button" class="compact-button">刷新已配置表</button>
         </div>
         <p id="activeDetailTable" class="active-detail-table">当前生效：暂无已配置表格</p>
@@ -109,7 +112,7 @@
         <div class="actions">
           <button id="detailValidateBtn" type="button">选定这个表</button>
           <button id="stopDetailBtn" type="button">停止补足</button>
-          <button id="openFavoritesBtn" type="button">预收藏后台</button>
+          <button id="openFavoritesBtn" type="button">预收藏达人库</button>
           <button id="backfillBtn" type="button" class="primary">补足详情</button>
         </div>
       </section>
@@ -129,7 +132,7 @@
           <input id="feishuAppSecret" type="password" autocomplete="off" placeholder="仅保存在本机浏览器" />
         </label>
         <div class="actions">
-          <button id="openOptionsBtn" type="button">打开飞书配置</button>
+          <button id="openOptionsBtn" type="button">打开设置页</button>
           <button id="saveBtn" type="button" class="primary">保存配置</button>
         </div>
       </section>

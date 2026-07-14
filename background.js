@@ -685,6 +685,19 @@ function base64ToBytes(base64) {
   return Array.from(binary, (char) => char.charCodeAt(0));
 }
 
+function bytesToBase64(bytes) {
+  const parts = [];
+  const chunkSize = 0x8000;
+  for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+    parts.push(String.fromCharCode(...bytes.subarray(offset, offset + chunkSize)));
+  }
+  return btoa(parts.join(""));
+}
+
+function binaryDownloadUrl(bytes, contentType) {
+  return `data:${contentType};base64,${bytesToBase64(bytes)}`;
+}
+
 function dataUrlBytes(dataUrl) {
   return base64ToBytes(dataUrlBase64(dataUrl));
 }
@@ -3161,9 +3174,6 @@ async function resolveDetailSpreadsheet(options) {
   const appId = options.feishuAppId;
   const appSecret = options.feishuAppSecret;
   const feishuUrl = options.detailFeishuUrl;
-  if (options.detailFeishuUrl && options.detailFeishuUrl === options.feishuUrl) {
-    throw new Error("需补足详情的飞书表格不能和同步达人飞书表格相同。");
-  }
   if (!appId || !appSecret || !feishuUrl) {
     throw new Error("请先填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
   }
@@ -4292,6 +4302,8 @@ function preFavoritePatchFromApiCache(userId, apiCache) {
   };
   const name = cleanJsonText(firstDefined(profile.name, profile.nickName, profile.nickname));
   if (name) patch.name = name;
+  const avatar = cleanJsonText(firstDefined(profile.headPhoto, profile.avatar, profile.avatarUrl, profile.headImage));
+  if (avatar) patch.avatar = avatar;
   if (redId) patch.redId = redId;
   const location = cleanJsonText(firstDefined(profile.location, profile.ipLocation, profile.ip_city, profile.city));
   if (location) patch.location = location;
@@ -5469,39 +5481,25 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === "DOWNLOAD_FAVORITES_XLSX") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
       const workbook = rowsToSimpleXlsx(rows, "达人库");
-      const blob = new Blob([workbook], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      const url = binaryDownloadUrl(workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      const downloadId = await chrome.downloads.download({
+        url,
+        filename: message.filename || `达人库-${rows.length}人.xlsx`,
+        saveAs: true
       });
-      const url = URL.createObjectURL(blob);
-      try {
-        const downloadId = await chrome.downloads.download({
-          url,
-          filename: message.filename || `达人库-${rows.length}人.xlsx`,
-          saveAs: true
-        });
-        sendResponse({ ok: true, downloadId });
-      } finally {
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      }
+      sendResponse({ ok: true, downloadId });
       return;
     }
     if (message?.type === "DOWNLOAD_PGY_XLSX") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
       const workbook = rowsToXlsx(rows);
-      const blob = new Blob([workbook], {
-        type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+      const url = binaryDownloadUrl(workbook, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+      const downloadId = await chrome.downloads.download({
+        url,
+        filename: message.filename || exportXlsxFilename(rows.length),
+        saveAs: true
       });
-      const url = URL.createObjectURL(blob);
-      try {
-        const downloadId = await chrome.downloads.download({
-          url,
-          filename: message.filename || exportXlsxFilename(rows.length),
-          saveAs: true
-        });
-        sendResponse({ ok: true, downloadId });
-      } finally {
-        setTimeout(() => URL.revokeObjectURL(url), 60_000);
-      }
+      sendResponse({ ok: true, downloadId });
       return;
     }
     if (message?.type === "DOWNLOAD_PGY_CSV" || message?.type === "DOWNLOAD_CSV") {

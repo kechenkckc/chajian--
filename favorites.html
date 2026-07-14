@@ -48,6 +48,26 @@
             <button id="importOnlineBtn" type="button">读取并导入</button>
           </div>
         </div>
+        <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
+          <div class="feishu-config-copy">
+            <span class="config-kicker">FEISHU TARGET</span>
+            <strong id="feishuConfigTitle">飞书写入配置</strong>
+            <p>选择达人库写入的目标表格，选择后立即生效并自动记住。</p>
+          </div>
+          <div class="feishu-config-control">
+            <label for="favoriteConfiguredTable">
+              <span>配置选择</span>
+              <select id="favoriteConfiguredTable">
+                <option value="">暂无已配置表格</option>
+              </select>
+            </label>
+            <p id="activeWriteTarget" class="active-write-target is-empty">当前生效：暂无可写入表格</p>
+          </div>
+          <div class="feishu-config-actions">
+            <button id="refreshFeishuConfigsBtn" type="button">刷新配置</button>
+            <button id="manageFeishuConfigsBtn" type="button">管理配置</button>
+          </div>
+        </div>
         <div id="dataProgress" class="data-progress" hidden>
           <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
           <progress id="dataProgressBar" max="100" value="0"></progress>
@@ -80,14 +100,9 @@
           <input id="selectAll" type="checkbox" />
           <span>全选当前筛选结果</span>
         </label>
-        <div class="write-target">
-          <label>
-            <span>写入已配置表格</span>
-            <select id="favoriteConfiguredTable">
-              <option value="">暂无已配置表格</option>
-            </select>
-          </label>
-          <p id="activeWriteTarget" class="active-write-target">当前生效：暂无可写入表格</p>
+        <div class="write-target-compact">
+          <span>写入目标</span>
+          <strong id="stickyWriteTarget">暂无可写入表格</strong>
         </div>
         <div class="write-actions">
           <span id="selectedCount">已选 0 位</span>
