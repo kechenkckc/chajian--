@@ -1,4 +1,14 @@
 (() => {
+  const INVITE_STORAGE_KEY = "pgyInviteWorkspace";
+  const EMPTY_INVITE_FORM = {
+    contentType: "1",
+    productName: "",
+    startDate: "",
+    endDate: "",
+    productDesc: "",
+    contactType: "1",
+    contact: ""
+  };
   if (window.__PGY_EXPORTER_CONTENT_INSTALLED__) return;
   window.__PGY_EXPORTER_CONTENT_INSTALLED__ = true;
 
@@ -46,21 +56,20 @@
     brandLoading: false,
     brandError: "",
     brand: null,
-    form: {
-      contentType: "1",
-      productName: "",
-      startDate: "",
-      endDate: "",
-      productDesc: "",
-      contactType: "1",
-      contact: ""
-    },
+    form: { ...EMPTY_INVITE_FORM },
+    templateId: "",
+    templates: [],
+    lastInvite: null,
+    storageLoaded: false,
+    storageError: "",
     loading: false,
     status: "",
     error: "",
     draft: null,
     submitResult: null
   };
+  let inviteSaveTimer = 0;
+  let inviteWorkspacePromise = null;
 
   function isBloggerDetailPage() {
     return location.pathname.includes("/solar/pre-trade/blogger-detail/");
@@ -85,6 +94,192 @@
 
   function saveOptions(patch) {
     return chrome.storage.local.set(patch);
+  }
+
+  function normalizeInviteForm(form) {
+    const source = form && typeof form === "object" ? form : {};
+    return Object.fromEntries(Object.entries(EMPTY_INVITE_FORM).map(([key, fallback]) => [key, String(source[key] ?? fallback)]));
+  }
+
+  function normalizeInviteBrand(brand) {
+    if (!brand || typeof brand !== "object" || Array.isArray(brand)) return null;
+    return {
+      label: String(brand.label || ""),
+      brandName: String(brand.brandName || ""),
+      value: String(brand.value || ""),
+      brandUserId: String(brand.brandUserId || ""),
+      avatar: String(brand.avatar || ""),
+      brandAvatar: String(brand.brandAvatar || "")
+    };
+  }
+
+  function normalizeInviteTemplate(template, index) {
+    if (!template || typeof template !== "object") return null;
+    const id = String(template.id || "").trim();
+    if (!id) return null;
+    return {
+      id,
+      name: String(template.name || `配置 ${index + 1}`).trim().slice(0, 30) || `配置 ${index + 1}`,
+      form: normalizeInviteForm(template.form),
+      brand: normalizeInviteBrand(template.brand),
+      brandKeyword: String(template.brandKeyword || ""),
+      updatedAt: Number(template.updatedAt || 0)
+    };
+  }
+
+  function normalizeLastInvite(snapshot) {
+    if (!snapshot || typeof snapshot !== "object") return null;
+    const brand = normalizeInviteBrand(snapshot.brand);
+    const form = normalizeInviteForm(snapshot.form);
+    const hasCustomFormValue = Object.entries(form).some(([key, value]) => value !== EMPTY_INVITE_FORM[key]);
+    if (!brand && !hasCustomFormValue) return null;
+    return {
+      form,
+      brand,
+      brandKeyword: String(snapshot.brandKeyword || brand?.label || brand?.brandName || ""),
+      usedAt: Number(snapshot.usedAt || 0)
+    };
+  }
+
+  function currentInviteSnapshot() {
+    return {
+      form: normalizeInviteForm(inviteState.form),
+      brand: normalizeInviteBrand(inviteState.brand),
+      brandKeyword: String(inviteState.brandKeyword || "")
+    };
+  }
+
+  function applyInviteSnapshot(snapshot) {
+    inviteState.form = normalizeInviteForm(snapshot?.form);
+    inviteState.brand = normalizeInviteBrand(snapshot?.brand);
+    inviteState.brandKeyword = String(snapshot?.brandKeyword || inviteState.brand?.label || inviteState.brand?.brandName || "");
+    inviteState.brandResults = [];
+    inviteState.brandLoading = false;
+    inviteState.brandError = "";
+    inviteState.draft = null;
+    inviteState.submitResult = null;
+  }
+
+  function inviteWorkspacePayload() {
+    return {
+      version: 2,
+      activeTemplateId: inviteState.templateId,
+      draft: {
+        ...currentInviteSnapshot(),
+        linksText: inviteState.linksText
+      },
+      templates: inviteState.templates,
+      lastInvite: inviteState.lastInvite
+    };
+  }
+
+  async function persistInviteWorkspace() {
+    if (!inviteState.storageLoaded) return;
+    clearTimeout(inviteSaveTimer);
+    inviteSaveTimer = 0;
+    try {
+      await chrome.storage.local.set({ [INVITE_STORAGE_KEY]: inviteWorkspacePayload() });
+      inviteState.storageError = "";
+    } catch (error) {
+      inviteState.storageError = error?.message || String(error);
+      const message = document.querySelector("#pgy-invite-modal .pgy-invite-message");
+      if (message) {
+        message.textContent = `自动保存失败：${inviteState.storageError}`;
+        message.classList.add("is-error");
+      }
+    }
+  }
+
+  function scheduleInviteWorkspaceSave() {
+    if (!inviteState.storageLoaded) return;
+    clearTimeout(inviteSaveTimer);
+    inviteSaveTimer = window.setTimeout(() => persistInviteWorkspace(), 300);
+  }
+
+  async function loadInviteWorkspace() {
+    if (inviteState.storageLoaded) return;
+    if (inviteWorkspacePromise) return inviteWorkspacePromise;
+    inviteWorkspacePromise = (async () => {
+      try {
+        const stored = await chrome.storage.local.get({ [INVITE_STORAGE_KEY]: null });
+        const workspace = stored[INVITE_STORAGE_KEY];
+        const normalizedTemplates = Array.isArray(workspace?.templates)
+          ? workspace.templates.map(normalizeInviteTemplate).filter(Boolean)
+          : [];
+        const templateIds = new Set();
+        const templates = normalizedTemplates.filter((template) => {
+          if (templateIds.has(template.id)) return false;
+          templateIds.add(template.id);
+          return true;
+        });
+        const activeTemplateId = String(workspace?.activeTemplateId || "");
+        const activeTemplate = templates.find((item) => item.id === activeTemplateId);
+        const draft = workspace?.draft && typeof workspace.draft === "object" ? workspace.draft : activeTemplate;
+        inviteState.templates = templates;
+        inviteState.templateId = activeTemplate ? activeTemplateId : "";
+        inviteState.lastInvite = normalizeLastInvite(workspace?.lastInvite);
+        inviteState.linksText = String(workspace?.draft?.linksText || inviteState.linksText || "");
+        if (draft) applyInviteSnapshot(draft);
+      } catch (error) {
+        inviteState.storageError = error?.message || String(error);
+      } finally {
+        inviteState.storageLoaded = true;
+      }
+    })();
+    await inviteWorkspacePromise;
+  }
+
+  function inviteTemplateIsDirty() {
+    const template = inviteState.templates.find((item) => item.id === inviteState.templateId);
+    if (!template) return Boolean(
+      inviteState.brandKeyword || Object.entries(inviteState.form).some(([key, value]) => value !== EMPTY_INVITE_FORM[key])
+    );
+    const current = currentInviteSnapshot();
+    return JSON.stringify(current) !== JSON.stringify({
+      form: template.form,
+      brand: template.brand,
+      brandKeyword: template.brandKeyword
+    });
+  }
+
+  function createInviteTemplateId() {
+    if (typeof globalThis.crypto?.randomUUID === "function") return globalThis.crypto.randomUUID();
+    return `invite-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  async function saveInviteTemplate({ saveAs = false } = {}) {
+    let template = saveAs ? null : inviteState.templates.find((item) => item.id === inviteState.templateId);
+    if (!template) {
+      const suggested = `邀约配置 ${inviteState.templates.length + 1}`;
+      const name = window.prompt("请输入信息模板名称", suggested)?.trim();
+      if (!name) return;
+      template = { id: createInviteTemplateId(), name: name.slice(0, 30) };
+      inviteState.templates = [...inviteState.templates, template];
+      inviteState.templateId = template.id;
+    }
+    Object.assign(template, currentInviteSnapshot(), { updatedAt: Date.now() });
+    await persistInviteWorkspace();
+    setInviteStatus(`信息模板“${template.name}”已保存。`);
+  }
+
+  async function renameInviteTemplate() {
+    const template = inviteState.templates.find((item) => item.id === inviteState.templateId);
+    if (!template) return;
+    const name = window.prompt("重命名信息模板", template.name)?.trim();
+    if (!name) return;
+    template.name = name.slice(0, 30);
+    template.updatedAt = Date.now();
+    await persistInviteWorkspace();
+    setInviteStatus("信息模板已重命名。");
+  }
+
+  async function deleteInviteTemplate() {
+    const template = inviteState.templates.find((item) => item.id === inviteState.templateId);
+    if (!template || !window.confirm(`确定删除信息模板“${template.name}”吗？`)) return;
+    inviteState.templates = inviteState.templates.filter((item) => item.id !== template.id);
+    inviteState.templateId = "";
+    await persistInviteWorkspace();
+    setInviteStatus("信息模板已删除，当前填写内容仍会自动保留。");
   }
 
   function requestFromPage(type, options = {}, timeoutMs = 180000) {
@@ -268,13 +463,13 @@
     const missingFeishuConfig = !options.feishuAppId || !options.feishuAppSecret;
     const missingFeishuTable = !options.feishuUrl;
     if (missingFeishuConfig && missingFeishuTable) {
-      throw new Error("请打开侧边栏设置填入飞书配置和飞书表格。");
+      throw new Error("请在更多功能中填入飞书配置和飞书表格。");
     }
     if (missingFeishuConfig) {
-      throw new Error("请打开侧边栏设置填入飞书配置。");
+      throw new Error("请在更多功能中填入飞书配置。");
     }
     if (missingFeishuTable) {
-      throw new Error("请打开侧边栏设置填入飞书表格。");
+      throw new Error("请在更多功能中填入飞书表格。");
     }
     await exportAll({ download: false, enrichDetails: true });
     exporting = true;
@@ -373,6 +568,8 @@
     inviteState.brandResults = [];
     inviteState.brandError = "";
     inviteState.submitResult = null;
+    scheduleInviteWorkspaceSave();
+    updateInviteActionState();
     clearTimeout(brandSearchTimer);
     removeBrandMenu();
     updateInviteActionState();
@@ -450,6 +647,11 @@
       setInviteStatus("已取消真实提交。");
       return;
     }
+    inviteState.lastInvite = {
+      ...currentInviteSnapshot(),
+      usedAt: Date.now()
+    };
+    await persistInviteWorkspace();
     inviteState.loading = true;
     inviteState.submitResult = null;
     inviteState.draft = null;
@@ -479,14 +681,16 @@
     window.open(`https://pgy.xiaohongshu.com/solar/pre-trade/invite-form?id=${encodeURIComponent(first.userId)}&fromRoute=BloggerDetail`, "_blank", "noopener");
   }
 
-  function openInviteModal() {
+  async function openInviteModal() {
+    await loadInviteWorkspace();
     const detailLink = currentDetailLink();
+    const shouldUseDetailLink = Boolean(detailLink && !inviteState.linksText);
     inviteState = {
       ...inviteState,
       step: 1,
-      linksText: detailLink && !inviteState.linksText ? detailLink : inviteState.linksText,
-      status: detailLink ? "已自动带入当前详情页博主链接。" : "",
-      error: "",
+      linksText: shouldUseDetailLink ? detailLink : inviteState.linksText,
+      status: shouldUseDetailLink ? "已自动带入当前详情页博主链接。" : "",
+      error: inviteState.storageError ? `读取上次邀约信息失败：${inviteState.storageError}` : "",
       draft: null,
       submitResult: null
     };
@@ -504,6 +708,7 @@
   }
 
   function closeInviteModal() {
+    persistInviteWorkspace();
     document.getElementById("pgy-invite-modal")?.remove();
   }
 
@@ -608,6 +813,40 @@
     }
     const counter = modal.querySelector(".pgy-invite-field em");
     if (counter && inviteState.step === 1) counter.textContent = `${parseInviteInputs(inviteState.linksText).length}/100`;
+    const templateState = modal.querySelector(".pgy-invite-template-heading > span:last-child");
+    if (templateState) {
+      const selectedTemplate = inviteState.templates.find((item) => item.id === inviteState.templateId);
+      const dirty = inviteTemplateIsDirty();
+      templateState.classList.toggle("is-dirty", dirty);
+      templateState.textContent = dirty ? "有未保存修改" : selectedTemplate ? "已保存" : "当前草稿";
+    }
+  }
+
+  function renderInviteTemplateBar() {
+    const selectedTemplate = inviteState.templates.find((item) => item.id === inviteState.templateId);
+    const dirty = inviteTemplateIsDirty();
+    const lastInviteText = inviteState.lastInvite?.usedAt
+      ? `上次邀约：${new Date(inviteState.lastInvite.usedAt).toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false })}`
+      : "完成一次真实邀约后可一键复用";
+    return `
+      <section class="pgy-invite-template-bar" aria-label="信息模板">
+        <div class="pgy-invite-template-heading">
+          <div><strong>信息模板</strong><span>自动记住当前填写，也可保存多套配置 · ${escapeHtml(lastInviteText)}</span></div>
+          <span class="${dirty ? "is-dirty" : ""}">${dirty ? "有未保存修改" : selectedTemplate ? "已保存" : "当前草稿"}</span>
+        </div>
+        <div class="pgy-invite-template-actions">
+          <button type="button" class="is-reuse" data-action="reuse-last-invite" ${inviteState.lastInvite ? "" : "disabled"}>复用上次信息</button>
+          <select data-field="templateId" aria-label="选择信息模板">
+            <option value="">不使用模板（保留当前）</option>
+            ${inviteState.templates.map((template) => `<option value="${escapeHtml(template.id)}" ${template.id === inviteState.templateId ? "selected" : ""}>${escapeHtml(template.name)}</option>`).join("")}
+          </select>
+          <button type="button" data-action="save-template">保存</button>
+          <button type="button" data-action="save-template-as">另存为</button>
+          <button type="button" data-action="rename-template" ${selectedTemplate ? "" : "disabled"}>重命名</button>
+          <button type="button" data-action="delete-template" ${selectedTemplate ? "" : "disabled"}>删除</button>
+        </div>
+      </section>
+    `;
   }
 
   function renderInviteModal() {
@@ -625,13 +864,13 @@
         <header class="pgy-invite-header">
           <div>
             <strong>一键邀约</strong>
-            <span>${inviteState.step === 1 ? "输入博主链接，可输入多条" : `已选择 ${okBloggers.length} 位博主`}</span>
+            <span>${inviteState.step === 1 ? "输入博主链接，可输入多条" : okBloggers.length ? `已选择 ${okBloggers.length} 位博主` : "可先维护并保存信息模板"}</span>
           </div>
           <button type="button" data-action="close-invite" title="关闭">×</button>
         </header>
         <div class="pgy-invite-steps">
           <button type="button" class="${inviteState.step === 1 ? "is-active" : "is-clickable"}" data-action="back-invite" ${inviteState.step === 1 ? "disabled" : ""}>1 链接</button>
-          <span class="${inviteState.step === 2 ? "is-active" : ""}">2 信息</span>
+          <button type="button" class="${inviteState.step === 2 ? "is-active" : "is-clickable"}" data-action="edit-invite-info">2 信息</button>
         </div>
         <main class="pgy-invite-main">
           ${inviteState.step === 1 ? `
@@ -644,6 +883,7 @@
             ${renderBloggerList()}
           ` : `
             ${renderBloggerList()}
+            ${renderInviteTemplateBar()}
             <div class="pgy-invite-form-grid">
               <label class="pgy-invite-field pgy-invite-brand-field">
                 <span>品牌名 *</span>
@@ -690,8 +930,8 @@
           <div class="pgy-invite-message ${inviteState.error ? "is-error" : ""}">${escapeHtml(inviteState.error || inviteState.status || "安全模式：不会自动发送真实邀约。")}</div>
           <button type="button" data-action="${inviteState.step === 1 ? "close-invite" : "back-invite"}">${inviteState.step === 1 ? "取消" : "上一步"}</button>
           ${inviteState.step === 1
-            ? `<button type="button" class="is-primary" data-action="resolve-bloggers" ${inviteState.loading ? "disabled" : ""}>${inviteState.loading ? "识别中..." : "下一步"}</button>`
-            : `<button type="button" data-action="open-native-invite">打开原生页</button><button type="button" data-action="build-draft" ${inviteState.loading || !inviteFormComplete() ? "disabled" : ""}>生成草稿</button><button type="button" class="is-primary is-danger" data-action="submit-real-invite" ${inviteState.loading || !inviteFormComplete() ? "disabled" : ""}>${inviteState.loading ? "提交中..." : "真实提交"}</button>`}
+            ? `<button type="button" data-action="edit-invite-info">管理信息模板</button><button type="button" class="is-primary" data-action="resolve-bloggers" ${inviteState.loading ? "disabled" : ""}>${inviteState.loading ? "识别中..." : "下一步"}</button>`
+            : `<button type="button" data-action="open-native-invite" ${okBloggers.length ? "" : "disabled"}>打开原生页</button><button type="button" data-action="build-draft" ${inviteState.loading || !inviteFormComplete() ? "disabled" : ""}>生成草稿</button><button type="button" class="is-primary is-danger" data-action="submit-real-invite" ${inviteState.loading || !inviteFormComplete() ? "disabled" : ""}>${inviteState.loading ? "提交中..." : "真实提交"}</button>`}
         </footer>
       </section>
     `;
@@ -729,7 +969,18 @@
       inviteState.linksText = event.target.value;
       inviteState.draft = null;
       inviteState.submitResult = null;
+      scheduleInviteWorkspaceSave();
       updateInviteActionState();
+      return;
+    }
+    if (field === "templateId") {
+      const template = inviteState.templates.find((item) => item.id === event.target.value);
+      inviteState.templateId = template?.id || "";
+      if (template) applyInviteSnapshot(template);
+      scheduleInviteWorkspaceSave();
+      inviteState.status = template ? `已加载信息模板“${template.name}”。` : "已取消模板关联，当前填写内容保持不变。";
+      inviteState.error = "";
+      renderInviteModal();
       return;
     }
     if (field === "brandKeyword") {
@@ -740,6 +991,7 @@
       inviteState.form[field] = event.target.value;
       inviteState.draft = null;
       inviteState.submitResult = null;
+      scheduleInviteWorkspaceSave();
       updateInviteActionState();
     }
   }
@@ -754,7 +1006,28 @@
       inviteState.submitResult = null;
       renderInviteModal();
     }
+    if (action === "edit-invite-info") {
+      inviteState.step = 2;
+      inviteState.status = inviteState.bloggers.some((item) => item.ok)
+        ? inviteState.status
+        : "可以先填写并保存信息模板，识别达人后再提交邀约。";
+      inviteState.error = "";
+      renderInviteModal();
+    }
     if (action === "resolve-bloggers") resolveInviteBloggers();
+    if (action === "save-template") saveInviteTemplate();
+    if (action === "save-template-as") saveInviteTemplate({ saveAs: true });
+    if (action === "rename-template") renameInviteTemplate();
+    if (action === "delete-template") deleteInviteTemplate();
+    if (action === "reuse-last-invite") {
+      if (!inviteState.lastInvite) return;
+      applyInviteSnapshot(inviteState.lastInvite);
+      inviteState.templateId = "";
+      inviteState.status = "已复用上次真实邀约信息，请确认品牌、档期和联系方式后提交。";
+      inviteState.error = "";
+      scheduleInviteWorkspaceSave();
+      renderInviteModal();
+    }
     if (action === "build-draft") buildInviteDraft();
     if (action === "submit-real-invite") submitRealInvite();
     if (action === "open-native-invite") openNativeInvitePage();
@@ -768,6 +1041,7 @@
       inviteState.brandLoading = false;
       inviteState.draft = null;
       inviteState.submitResult = null;
+      scheduleInviteWorkspaceSave();
       renderInviteModal();
     }
   }
@@ -881,7 +1155,7 @@
     if (document.getElementById("pgy-exporter-panel")) return;
     const panel = document.createElement("section");
     panel.id = "pgy-exporter-panel";
-    panel.title = "右键打开侧边栏设置";
+    panel.title = "右键打开更多功能";
     panel.innerHTML = `
       <div class="pgy-exporter-head">
         <div class="pgy-exporter-brand"><span>SOLO专用</span><strong>达人数据台</strong></div>
@@ -894,17 +1168,18 @@
             <time>--:--</time>
           </div>
           <strong class="pgy-exporter-task-label">先在找达人页面完成筛选</strong>
-          <p class="pgy-exporter-status">准备好后点击导出当前达人</p>
+          <p class="pgy-exporter-status">准备好后点击导出为表格</p>
           <div class="pgy-exporter-progress"><span></span></div>
           <div class="pgy-exporter-meta"><span>阶段 0/3</span><span>0 位达人</span></div>
         </div>
         <div class="pgy-exporter-actions">
-          <button type="button" data-action="export">导出当前达人</button>
+          <button type="button" data-action="export">导出为表格</button>
           <button type="button" data-action="invite">一键邀约</button>
-          <button type="button" data-action="stop" disabled>停止采集</button>
-          <button type="button" data-action="sync">直接采集达人到飞书</button>
-          <button type="button" data-action="side-settings">打开侧边栏设置</button>
+          <button type="button" data-action="sync">直采达人到飞书</button>
+          <button type="button" data-action="favorites">达人库</button>
+          <button type="button" data-action="side-settings">更多功能</button>
           <button type="button" data-action="feishu-settings">打开设置页</button>
+          <button type="button" data-action="stop" hidden>停止采集</button>
         </div>
       </div>
     `;
@@ -933,12 +1208,16 @@
         if (action === "invite") {
           openInviteModal();
         }
+        if (action === "favorites") {
+          const result = await chrome.runtime.sendMessage({ type: "OPEN_FAVORITES_PAGE" });
+          if (!result?.ok) throw new Error(result?.message || "打开达人库失败。");
+        }
         if (action === "side-settings") {
           const result = await chrome.runtime.sendMessage({ type: "OPEN_SIDE_PANEL" });
           ensurePanelVisible();
           setTimeout(ensurePanelVisible, 150);
           setTimeout(ensurePanelVisible, 500);
-          if (!result?.ok) throw new Error(result?.message || "打开侧边栏失败，请点击扩展图标打开。");
+          if (!result?.ok) throw new Error(result?.message || "打开更多功能失败，请点击扩展图标打开。");
         }
         if (action === "feishu-settings") {
           await chrome.runtime.sendMessage({ type: "OPEN_OPTIONS_PAGE" });
@@ -985,7 +1264,10 @@
       ? `${exportTask.collected}${exportTask.total && exportTask.total !== exportTask.collected ? ` / ${exportTask.total}` : ""} 位达人`
       : "等待开始";
     const stopButton = panel.querySelector('[data-action="stop"]');
-    if (stopButton) stopButton.disabled = !exporting;
+    if (stopButton) {
+      stopButton.hidden = !exporting;
+      stopButton.disabled = !exporting;
+    }
     panel.querySelectorAll('[data-action="export"], [data-action="sync"]').forEach((button) => {
       button.disabled = exporting;
     });
@@ -1016,6 +1298,10 @@
 
   window.addEventListener("resize", () => {
     requestAnimationFrame(ensurePanelVisible);
+  });
+
+  window.addEventListener("pagehide", () => {
+    if (inviteState.storageLoaded) persistInviteWorkspace();
   });
 
   injectPageHook();

@@ -333,6 +333,24 @@ input[type="file"] {
   margin-top: 12px;
 }
 
+.collection-actions {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.collection-actions .compact-stop {
+  min-height: 29px;
+  padding: 0 9px;
+  color: #a54134;
+  border-color: rgba(165, 65, 52, 0.3);
+  font-size: 12px;
+  background: #fffaf9;
+}
+
+.collection-actions .compact-stop[hidden] {
+  display: none;
+}
+
 button {
   min-height: 39px;
   padding: 0 11px;

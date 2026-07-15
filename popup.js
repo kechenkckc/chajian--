@@ -44,6 +44,8 @@ const statusNode = document.getElementById("status");
 const syncStateBadge = document.getElementById("syncStateBadge");
 const detailStateBadge = document.getElementById("detailStateBadge");
 const syncBtn = document.getElementById("syncBtn");
+const exportBtn = document.getElementById("exportBtn");
+const stopExportBtn = document.getElementById("stopExportBtn");
 const syncValidateBtn = document.getElementById("syncValidateBtn");
 const backfillBtn = document.getElementById("backfillBtn");
 const syncUpdateExisting = document.getElementById("syncUpdateExisting");
@@ -67,6 +69,14 @@ let syncSource = "current";
 let detailMultiSheetAvailable = false;
 let syncMultiSheetAvailable = false;
 let configuredTables = [];
+let collectionRunning = false;
+
+function setCollectionRunning(running) {
+  collectionRunning = Boolean(running);
+  stopExportBtn.hidden = !collectionRunning;
+  exportBtn.disabled = collectionRunning;
+  syncBtn.disabled = collectionRunning || syncBtn.dataset.configDisabled === "true";
+}
 
 function setStatus(text, isError = false) {
   statusNode.textContent = text;
@@ -355,7 +365,8 @@ function updateCapabilityState() {
     ? "勾选后，导出完成会直接写回飞书同步表格。"
     : "先补全飞书 App ID、App Secret 和同步达人飞书表格，才能勾选直写。";
 
-  syncBtn.disabled = !syncOk;
+  syncBtn.dataset.configDisabled = String(!syncOk);
+  syncBtn.disabled = !syncOk || collectionRunning;
   syncValidateBtn.disabled = !syncOk;
   syncUseFirstSheet.disabled = !syncOk || !syncMultiSheetAvailable || Boolean(options.feishuSheetId);
   if (syncUseFirstSheet.disabled) syncUseFirstSheet.checked = false;
@@ -676,23 +687,28 @@ async function downloadRowsCsv(rows) {
 }
 
 async function exportCsv() {
-  let options = await saveOptions();
-  if (writeToFeishuOnExport.checked) {
-    options = await validateSyncTarget();
+  setCollectionRunning(true);
+  try {
+    let options = await saveOptions();
+    if (writeToFeishuOnExport.checked) {
+      options = await validateSyncTarget();
+    }
+    setStatus("正在导出当前筛选下的达人...");
+    const result = await exportCurrentRows(!isDetailCollectionMode(options));
+    if (isDetailCollectionMode(options)) {
+      latestRows = await enrichRowsForDetailMode(latestRows, options);
+      await downloadRowsCsv(latestRows);
+    }
+    if (writeToFeishuOnExport.checked) {
+      setStatus("正在把导出的达人写回飞书...");
+      await syncRows(latestRows, options);
+      setStatus(`已导出并写回飞书，共 ${latestRows.length} 条。`);
+      return;
+    }
+    setStatus(`已导出表格，共 ${latestRows.length} 条。`);
+  } finally {
+    setCollectionRunning(false);
   }
-  setStatus("正在导出当前筛选下的达人...");
-  const result = await exportCurrentRows(!isDetailCollectionMode(options));
-  if (isDetailCollectionMode(options)) {
-    latestRows = await enrichRowsForDetailMode(latestRows, options);
-    await downloadRowsCsv(latestRows);
-  }
-  if (writeToFeishuOnExport.checked) {
-    setStatus("正在把导出的达人写回飞书...");
-    await syncRows(latestRows, options);
-    setStatus(`已导出并写回飞书，共 ${latestRows.length} 条。`);
-    return;
-  }
-  setStatus(`已导出当前达人表格，共 ${latestRows.length} 条。`);
 }
 
 async function syncSelectedRows() {
@@ -701,9 +717,14 @@ async function syncSelectedRows() {
   if (syncSource === "imported") {
     rows = importedRows.length ? importedRows : await readImportedCsv();
   } else {
-    setStatus("正在读取当前筛选下的达人...");
-    const result = await exportCurrentRows(false);
-    rows = result.rows || [];
+    setCollectionRunning(true);
+    try {
+      setStatus("正在读取当前筛选下的达人...");
+      const result = await exportCurrentRows(false);
+      rows = result.rows || [];
+    } finally {
+      setCollectionRunning(false);
+    }
   }
   rows = await enrichRowsForDetailMode(rows, options);
   setStatus("正在写入飞书...");
@@ -819,8 +840,8 @@ syncSourceCurrentBtn.addEventListener("click", () => setSyncSource("current"));
 syncSourceImportedBtn.addEventListener("click", () => setSyncSource("imported"));
 csvFile.addEventListener("change", () => readImportedCsv().catch((error) => setStatus(error.message, true)));
 
-document.getElementById("exportBtn").addEventListener("click", () => exportCsv().catch((error) => setStatus(error.message, true)));
-document.getElementById("stopExportBtn").addEventListener("click", () => stopExport().catch((error) => setStatus(error.message, true)));
+exportBtn.addEventListener("click", () => exportCsv().catch((error) => setStatus(error.message, true)));
+stopExportBtn.addEventListener("click", () => stopExport().catch((error) => setStatus(error.message, true)));
 syncValidateBtn.addEventListener("click", () => validateSyncTargetStatus().then((result) => setStatus(describeSyncValidation(result))).catch((error) => setStatus(error.message, true)));
 syncBtn.addEventListener("click", () => syncSelectedRows().catch((error) => setStatus(error.message, true)));
 function describeSyncValidation(result) {

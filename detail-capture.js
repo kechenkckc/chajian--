@@ -179,7 +179,8 @@
       }
       #pgy-detail-favorite-btn:hover { background: #fff5f7; }
       #pgy-detail-prefavorite-btn:hover { background: #eaf5dd; }
-      .pgy-similar-favorite-btn {
+      .pgy-similar-favorite-btn,
+      .pgy-similar-prefavorite-btn {
         display: inline-flex;
         align-items: center;
         justify-content: center;
@@ -201,12 +202,23 @@
         border-color: rgba(255, 36, 72, 0.48);
         background: #fff5f7;
       }
+      .pgy-similar-prefavorite-btn {
+        margin-left: 4px;
+        border-color: rgba(36, 93, 60, 0.3);
+        color: #245d3c;
+        background: #f7ffe9;
+      }
+      .pgy-similar-prefavorite-btn:hover {
+        border-color: rgba(36, 93, 60, 0.5);
+        background: #eaf5dd;
+      }
       .pgy-similar-favorite-btn.is-accepted {
         border-color: rgba(36, 93, 60, 0.28);
         color: #245d3c;
         background: #f7ffe9;
       }
-      .pgy-similar-favorite-btn[disabled] {
+      .pgy-similar-favorite-btn[disabled],
+      .pgy-similar-prefavorite-btn[disabled] {
         cursor: default;
         opacity: 0.72;
       }
@@ -334,11 +346,12 @@
       videoPriceText: favoriteMetricText(detail.video_quote_price),
       quoteStatus: detail.quote_price || detail.video_quote_price ? "报价已获取" : "报价获取中",
       bio: detail.personal_intro || detail.blogger_advantage || "",
-      categoryTags: String(detail.topic_point || "").split(/[、,，;；/]+/).map((item) => item.trim()).filter(Boolean).slice(0, 6),
+      categoryTags: String(detail.topic_point || "").split(/[、,，;；/]+/).map((item) => item.trim()).filter(Boolean).slice(0, 30),
       categorySource: detail.topic_point ? "pgy_detail" : "pending",
       xhsUrl: detail.profile_url || `https://www.xiaohongshu.com/user/profile/${userId}`,
       pgyUrl: location.href,
       source: "pgy_detail_prefavorite",
+      acquisitionSources: [{ key: "pgy-profile", type: "pgy_profile", label: "蒲公英主页", acquiredAt: now }],
       status: "预收藏",
       createdAt: now,
       updatedAt: now
@@ -348,7 +361,14 @@
     const existingIndex = favorites.findIndex((item) => item?.userId === userId);
     const next = [...favorites];
     if (existingIndex >= 0) {
-      next[existingIndex] = { ...next[existingIndex], ...record, createdAt: next[existingIndex].createdAt || now };
+      const existing = next[existingIndex] || {};
+      next[existingIndex] = {
+        ...existing,
+        ...record,
+        acquisitionSources: [...(existing.acquisitionSources || []), ...record.acquisitionSources]
+          .filter((entry, index, entries) => entry?.key && entries.findIndex((candidate) => candidate?.key === entry.key) === index),
+        createdAt: existing.createdAt || now
+      };
     } else {
       next.unshift(record);
     }
@@ -378,7 +398,7 @@
     const headings = Array.from(document.querySelectorAll("div, span, p, h2, h3, h4"))
       .filter((element) => {
         const text = cleanText(element.textContent || "");
-        return text.length <= 60 && /相似的?博主推荐|相似博主/.test(text);
+        return text.length <= 60 && /相似的?博主推荐|相似博主|推荐博主/.test(text);
       });
     for (const heading of headings) {
       let root = heading.parentElement;
@@ -436,6 +456,91 @@
     return userId ? `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${userId}` : "";
   }
 
+  function similarBloggerName(card) {
+    const imageAlt = Array.from(card.querySelectorAll("img"))
+      .map((image) => cleanText(image.getAttribute("alt") || ""))
+      .find((text) => text && text.length <= 40 && !/头像|图片/.test(text));
+    if (imageAlt) return imageAlt;
+    for (const selector of ["strong", "h2", "h3", "h4", "[class*='name']", "[class*='nick']"]) {
+      for (const element of card.querySelectorAll(selector)) {
+        const text = cleanText(element.textContent || "");
+        if (text && text.length <= 40 && !/查看详情|收藏|粉丝|报价/.test(text)) return text;
+      }
+    }
+    return "未命名达人";
+  }
+
+  function similarBloggerAvatar(card) {
+    return Array.from(card.querySelectorAll("img"))
+      .map((image) => String(image.currentSrc || image.src || image.getAttribute("data-src") || "").trim())
+      .find((value) => /^https?:\/\//i.test(value) || /^data:image\//i.test(value)) || "";
+  }
+
+  function similarBloggerMetric(cardText, labelPattern) {
+    const matched = cardText.match(new RegExp(`(?:${labelPattern})(?:数)?\\s*[:：]?\\s*([0-9.]+\\s*(?:万|w|W)?)`, "i"));
+    return cleanText(matched?.[1] || "");
+  }
+
+  async function saveSimilarCardAsPreFavorite(card, detailUrl) {
+    const userId = detailUserIdFromUrl(detailUrl);
+    if (!userId) throw new Error("暂未识别到这位达人的 ID，请先点击“查看详情”进入达人页面后预收藏。");
+    const cardText = cleanText(card.textContent || "");
+    const now = new Date().toISOString();
+    const record = {
+      userId,
+      name: similarBloggerName(card),
+      avatar: similarBloggerAvatar(card),
+      followersText: similarBloggerMetric(cardText, "粉丝"),
+      likesText: similarBloggerMetric(cardText, "获赞与收藏|赞藏"),
+      quoteStatus: "报价获取中",
+      categoryTags: [],
+      categorySource: "pending",
+      pgyUrl: detailUrl,
+      source: "pgy_similar_prefavorite",
+      acquisitionSources: [{ key: "pgy-similar", type: "pgy_similar", label: "蒲公英相似达人", acquiredAt: now }],
+      status: "预收藏",
+      createdAt: now,
+      updatedAt: now
+    };
+    const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+    const favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
+    const existingIndex = favorites.findIndex((item) => item?.userId === userId);
+    const next = [...favorites];
+    if (existingIndex >= 0) {
+      const existing = next[existingIndex] || {};
+      next[existingIndex] = {
+        ...record,
+        ...existing,
+        acquisitionSources: [...(existing.acquisitionSources || []), ...record.acquisitionSources]
+          .filter((entry, index, entries) => entry?.key && entries.findIndex((candidate) => candidate?.key === entry.key) === index),
+        pgyUrl: existing.pgyUrl || detailUrl,
+        createdAt: existing.createdAt || now,
+        updatedAt: now
+      };
+    } else {
+      next.unshift(record);
+    }
+    await chrome.storage.local.set({ pgyPreFavorites: next });
+    chrome.runtime.sendMessage({ type: "ENRICH_PREFAVORITE_QUOTE", userId }).catch(() => null);
+    return { existing: existingIndex >= 0, count: next.length };
+  }
+
+  async function refreshSimilarPreFavoriteButtonStates(root = document) {
+    const buttons = Array.from(root.querySelectorAll(".pgy-similar-prefavorite-btn[data-user-id]"));
+    if (!buttons.length) return;
+    const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
+    const favoriteIds = new Set((Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [])
+      .map((item) => String(item?.userId || ""))
+      .filter(Boolean));
+    for (const button of buttons) {
+      if (button.disabled) continue;
+      const exists = favoriteIds.has(button.dataset.userId || "");
+      const nextText = exists ? "✓ 已预收藏" : "☆ 预收藏";
+      if (button.textContent !== nextText) button.textContent = nextText;
+      button.classList.toggle("is-accepted", exists);
+    }
+  }
+
   function installSimilarFavoriteButtons() {
     const root = findSimilarRecommendationRoot();
     if (!root) return;
@@ -450,39 +555,72 @@
       const userId = detailUserIdFromUrl(detailUrl) || `card-${cardIndex}`;
       if (userId === currentUserId || handledUserIds.has(userId)) continue;
       handledUserIds.add(userId);
-      if (card.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(userId)}"]`)) continue;
+      let favoriteButton = card.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(userId)}"]`);
+      if (!favoriteButton) {
+        favoriteButton = document.createElement("button");
+        favoriteButton.type = "button";
+        favoriteButton.className = "pgy-similar-favorite-btn";
+        favoriteButton.dataset.userId = userId;
+        favoriteButton.textContent = "☆ 收藏";
+        favoriteButton.title = "采集这位达人的完整详情并收藏到飞书";
+        favoriteButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          if (favoriteButton.disabled) return;
+          favoriteButton.disabled = true;
+          favoriteButton.textContent = "收藏中...";
+          try {
+            if (!detailUrl) throw new Error("暂未识别到这位达人的详情地址，请先点击“查看详情”进入该达人页面后收藏。");
+            const result = await chrome.runtime.sendMessage({
+              type: "FAVORITE_DETAIL_URL",
+              detailUrl
+            });
+            if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
+            favoriteButton.textContent = "✓ 已发起";
+            favoriteButton.classList.add("is-accepted");
+            showFavoriteToast(`已开始后台收藏${similarBloggerName(card)}。`);
+          } catch (error) {
+            favoriteButton.textContent = "☆ 收藏";
+            favoriteButton.disabled = false;
+            showFavoriteToast(error?.message || String(error), true);
+          }
+        }, true);
+        detailTrigger.before(favoriteButton);
+      }
 
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "pgy-similar-favorite-btn";
-      button.dataset.userId = userId;
-      button.textContent = "☆ 收藏";
-      button.title = "采集这位达人的完整详情并收藏到飞书";
-      button.addEventListener("click", async (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        event.stopImmediatePropagation();
-        if (button.disabled) return;
-        button.disabled = true;
-        button.textContent = "收藏中...";
-        try {
-          if (!detailUrl) throw new Error("暂未识别到这位达人的详情地址，请先点击“查看详情”进入该达人页面后收藏。");
-          const result = await chrome.runtime.sendMessage({
-            type: "FAVORITE_DETAIL_URL",
-            detailUrl
-          });
-          if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
-          button.textContent = "✓ 已发起";
-          button.classList.add("is-accepted");
-          showFavoriteToast(`已开始后台收藏${cleanText(card.querySelector("strong, h3, h4")?.textContent || "这位达人")}。`);
-        } catch (error) {
-          button.textContent = "☆ 收藏";
-          button.disabled = false;
-          showFavoriteToast(error?.message || String(error), true);
-        }
-      }, true);
-      detailTrigger.before(button);
+      let preFavoriteButton = card.querySelector(`.pgy-similar-prefavorite-btn[data-user-id="${CSS.escape(userId)}"]`);
+      if (!preFavoriteButton) {
+        preFavoriteButton = document.createElement("button");
+        preFavoriteButton.type = "button";
+        preFavoriteButton.className = "pgy-similar-prefavorite-btn";
+        preFavoriteButton.dataset.userId = userId;
+        preFavoriteButton.textContent = "☆ 预收藏";
+        preFavoriteButton.title = "将这位达人加入达人库，并在后台补全报价等信息";
+        preFavoriteButton.addEventListener("click", async (event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          event.stopImmediatePropagation();
+          if (preFavoriteButton.disabled) return;
+          preFavoriteButton.disabled = true;
+          preFavoriteButton.textContent = "保存中...";
+          try {
+            const result = await saveSimilarCardAsPreFavorite(card, detailUrl);
+            preFavoriteButton.textContent = "✓ 已预收藏";
+            preFavoriteButton.classList.add("is-accepted");
+            showFavoriteToast(result.existing ? `已更新${similarBloggerName(card)}的预收藏信息。` : `已将${similarBloggerName(card)}加入达人库，共 ${result.count} 位达人。`);
+          } catch (error) {
+            preFavoriteButton.textContent = "☆ 预收藏";
+            preFavoriteButton.classList.remove("is-accepted");
+            showFavoriteToast(error?.message || String(error), true);
+          } finally {
+            preFavoriteButton.disabled = false;
+          }
+        }, true);
+        detailTrigger.before(preFavoriteButton);
+      }
     }
+    refreshSimilarPreFavoriteButtonStates(root).catch(() => null);
   }
 
   function observeSimilarFavoriteCards() {
@@ -1024,6 +1162,7 @@
         #pgy-detail-prefavorite-btn,
         #pgy-detail-favorite-toast,
         .pgy-similar-favorite-btn,
+        .pgy-similar-prefavorite-btn,
         [id^="pgy-exporter-"],
         .pgy-exporter-head,
         .pgy-exporter-body,

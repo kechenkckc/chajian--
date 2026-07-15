@@ -208,28 +208,65 @@ const FavoriteDataTools = (() => {
     return tags;
   }
 
-  function objectToFavorite(row) {
+  function customColumnNames(value) {
+    const source = Array.isArray(value) ? value : String(value || "").split(/[\n,，、;；]+/);
+    return Array.from(new Set(source.map((item) => String(item || "").trim()).filter(Boolean))).slice(0, 30);
+  }
+
+  function ratingValue(value) {
+    const text = cellText(value);
+    if (!text) return null;
+    const stars = (text.match(/[★⭐]/g) || []).length;
+    const match = text.match(/-?\d+(?:\.\d+)?/);
+    if (stars && !match) return Math.min(5, stars);
+    if (!match) return null;
+    const number = Number(match[0]);
+    return Number.isFinite(number) ? Math.max(0, Math.min(5, number)) : null;
+  }
+
+  function objectToFavorite(row, options = {}) {
     const values = normalizedRow(row);
     const pgyUrl = pick(values, "pgyUrl");
     const xhsUrl = pick(values, "xhsUrl");
     const userId = cleanUserId(pick(values, "userId"), pgyUrl, xhsUrl);
     if (!userId) return null;
     const record = { userId, source: "spreadsheet_import", updatedAt: new Date().toISOString() };
+    const acquisitionSource = row?.__favoriteAcquisitionSource || options.acquisitionSource;
+    if (acquisitionSource?.key) record.acquisitionSources = [{ ...acquisitionSource }];
     for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "cooperationExposureMedian", "cooperationReadMedian", "cooperationInteractionMedian", "cooperationNoteCount", "cpmText", "cpeText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
       const value = pick(values, field);
       if (value) record[field] = value;
     }
     const categoryText = pick(values, "categoryTags");
     if (categoryText) record.categoryTags = splitTags(categoryText);
-    const customTagText = pick(values, "customTags");
+    const customTagColumn = String(options.customTagColumn || "").trim();
+    const customTagText = customTagColumn
+      ? values.get(normalizeHeader(customTagColumn)) || ""
+      : pick(values, "customTags");
     if (customTagText) record.customTags = splitTags(customTagText);
+    const ratingColumn = String(options.ratingColumn || "").trim();
+    const importedRating = ratingColumn ? ratingValue(values.get(normalizeHeader(ratingColumn))) : null;
+    if (importedRating !== null) {
+      record.rating = {
+        value: importedRating,
+        max: 5,
+        display: options.ratingDisplay === "score" ? "score" : "stars",
+        columnName: ratingColumn
+      };
+    }
+    const customFields = {};
+    for (const columnName of customColumnNames(options.customColumns)) {
+      const value = values.get(normalizeHeader(columnName));
+      if (value !== undefined && value !== "") customFields[columnName] = value;
+    }
+    if (Object.keys(customFields).length) record.customFields = customFields;
     if (!record.status) record.status = "表格导入";
     if (!record.createdAt) record.createdAt = new Date().toISOString();
     return record;
   }
 
-  function objectsToFavorites(rows) {
-    return (Array.isArray(rows) ? rows : []).map(objectToFavorite).filter(Boolean);
+  function objectsToFavorites(rows, options = {}) {
+    return (Array.isArray(rows) ? rows : []).map((row) => objectToFavorite(row, options)).filter(Boolean);
   }
 
   function mergeFavorites(existing, incoming) {
@@ -251,6 +288,13 @@ const FavoriteDataTools = (() => {
       if (record.customTags?.length) {
         patch.customTags = Array.from(new Set([...(current.customTags || []), ...record.customTags]));
       }
+      if (record.customFields && typeof record.customFields === "object") {
+        patch.customFields = { ...(current.customFields || {}), ...record.customFields };
+      }
+      if (record.acquisitionSources?.length) {
+        patch.acquisitionSources = [...(current.acquisitionSources || []), ...record.acquisitionSources]
+          .filter((entry, index, entries) => entry?.key && entries.findIndex((candidate) => candidate?.key === entry.key) === index);
+      }
       byId.set(record.userId, {
         ...current,
         ...patch,
@@ -265,13 +309,22 @@ const FavoriteDataTools = (() => {
   }
 
   function toExportRow(item) {
+    const extraFields = { ...(item.customFields || {}) };
+    const ratingColumn = String(item.rating?.columnName || "达人评分").trim();
+    if (item.rating?.value !== undefined && item.rating?.value !== null) {
+      const fullStars = Math.max(0, Math.min(5, Math.floor(item.rating.value)));
+      extraFields[ratingColumn] = item.rating.display === "stars"
+        ? `${"★".repeat(fullStars)}${"☆".repeat(5 - fullStars)} · ${item.rating.value}/5`
+        : item.rating.value;
+    }
     return {
       "达人ID": item.userId || "",
       "达人昵称": item.name || "",
       "头像链接": item.avatar || "",
       "小红书号": item.redId || "",
       "IP属地": item.location || "",
-      "粉丝数": item.followersText || "",
+      "粉丝数": item.followersCount !== undefined && item.followersCount !== "" ? item.followersCount : item.followersText || "",
+      "粉丝数（万）": item.followersCount !== undefined && item.followersCount !== "" ? Math.round((Number(item.followersCount) / 10000) * 10000) / 10000 : "",
       "获赞与收藏": item.likesText || "",
       "图文报价": item.picturePriceText || "",
       "视频报价": item.videoPriceText || "",
@@ -287,8 +340,10 @@ const FavoriteDataTools = (() => {
       "小红书主页": item.xhsUrl || "",
       "蒲公英主页": item.pgyUrl || "",
       "达人库状态": item.status || "",
+      "获取渠道": (item.acquisitionSources || []).map((entry) => entry.label).filter(Boolean).join("、"),
       "创建时间": item.createdAt || "",
-      "更新时间": item.updatedAt || ""
+      "更新时间": item.updatedAt || "",
+      ...extraFields
     };
   }
 

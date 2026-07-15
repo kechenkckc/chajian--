@@ -12,7 +12,7 @@
           <span class="product-mark">SOLO专用</span>
           <div>
             <p class="eyebrow">达人候选数据库</p>
-            <h1>预收藏达人库</h1>
+            <h1>达人库</h1>
           </div>
         </div>
         <div class="actions">
@@ -43,13 +43,50 @@
             <button id="exportBtn" type="button">导出 Excel</button>
             <label class="file-button" for="importFile">导入表格</label>
             <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+            <button id="updatePendingBtn" type="button">更新未更新达人</button>
             <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
+          </div>
+          <div class="import-field-settings">
+            <div class="import-field-heading">
+              <strong>自定义读取字段</strong>
+              <span>导入前填写表格中的原始列名，数据会跟随达人保存、展示、筛选并写入飞书。</span>
+            </div>
+            <label>
+              <span>评分列名</span>
+              <input id="ratingColumnInput" type="text" value="达人评分" placeholder="例如：达人评分" />
+            </label>
+            <label>
+              <span>评分展示</span>
+              <select id="ratingDisplaySelect">
+                <option value="stars">5 颗星</option>
+                <option value="score">5 分制</option>
+              </select>
+            </label>
+            <label class="custom-columns-setting">
+              <span>其他读取列</span>
+              <input id="customColumnsInput" type="text" placeholder="例如：返点数据、达人评价（多个列名用逗号分隔）" />
+            </label>
           </div>
           <div class="online-import">
             <label for="onlineTableUrl">在线表格地址</label>
-            <div>
+            <div class="online-import-url-row">
               <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
-              <button id="importOnlineBtn" type="button">读取并导入</button>
+              <button id="loadOnlineSheetsBtn" type="button">获取子表</button>
+            </div>
+            <div class="online-import-settings">
+              <label for="onlineTagColumn">
+                <span>标签列名</span>
+                <input id="onlineTagColumn" type="text" placeholder="默认识别：标签 / 达人标签 / 自定义标签" />
+              </label>
+              <p>填写后，将按该列读取达人标签，并应用到所有选中的子表。</p>
+            </div>
+            <div id="onlineSheetPicker" class="online-sheet-picker" hidden>
+              <div class="online-sheet-picker-head">
+                <label><input id="onlineSheetSelectAll" type="checkbox" /> 全选</label>
+                <span id="onlineSheetSelectionCount">已选 0 个子表</span>
+              </div>
+              <div id="onlineSheetOptions" class="online-sheet-options"></div>
+              <button id="importOnlineBtn" type="button" class="primary">导入已选子表</button>
             </div>
           </div>
           <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
@@ -100,6 +137,12 @@
               <option value="">全部飞书状态</option>
               <option value="never">未写回过</option>
               <option value="any">已写回过任意表格</option>
+            </select>
+          </label>
+          <label class="status-field">
+            <span>获取状态</span>
+            <select id="acquisitionFilter">
+              <option value="">全部获取渠道</option>
             </select>
           </label>
         </div>
@@ -172,6 +215,20 @@
             <button id="clearPerformanceFiltersBtn" type="button">清除本组</button>
           </div>
         </details>
+        <details class="performance-filter-panel custom-data-filter-panel">
+          <summary>
+            <span>评分与自定义列筛选</span>
+            <small id="customDataFilterSummary">评分、自定义文本 · 已启用 0 项</small>
+          </summary>
+          <div class="performance-filter-body">
+            <div class="rating-filter-row">
+              <span>达人评分</span>
+              <div><input id="ratingMinInput" type="number" min="0" max="5" step="0.5" placeholder="最低" /><b>—</b><input id="ratingMaxInput" type="number" min="0" max="5" step="0.5" placeholder="最高" /></div>
+            </div>
+            <div id="customFieldFilters" class="custom-field-filters"></div>
+            <button id="clearCustomDataFiltersBtn" type="button">清除本组</button>
+          </div>
+        </details>
         </div>
       </details>
 
@@ -204,6 +261,7 @@
         </div>
         <div class="write-actions">
           <span id="selectedCount">已选 0 位</span>
+          <button id="batchRemoveBtn" type="button" class="danger batch-remove" title="移除当前筛选结果中的达人" disabled>批量移除筛选结果</button>
           <button id="writeFeishuBtn" type="button" class="primary" disabled>写入飞书表格</button>
         </div>
         <div class="tag-manager">

@@ -67,6 +67,7 @@ function createTableConfig() {
     sheetName: "",
     resourceType: "",
     sheets: [],
+    noSheets: false,
     isDefault: false,
     persisted: false
   };
@@ -82,6 +83,7 @@ function normalizeTableConfigs(configs) {
       tableName: String(item?.tableName || "").trim(),
       sheetName: String(item?.sheetName || "").trim(),
       resourceType: String(item?.resourceType || "").trim(),
+      noSheets: Boolean(item?.noSheets),
       isDefault: Boolean(item?.isDefault)
     }))
     .filter((item) => item.name || item.url || item.sheetId);
@@ -97,6 +99,7 @@ function mapTableConfigsForUi(configs) {
     sheetName: String(item?.sheetName || "").trim(),
     resourceType: String(item?.resourceType || "").trim(),
     sheets: Array.isArray(item?.sheets) ? item.sheets : [],
+    noSheets: Boolean(item?.noSheets),
     isDefault: Boolean(item?.isDefault),
     persisted: item?.persisted !== false
   }));
@@ -118,28 +121,87 @@ function ensureVisibleTableConfigs(configs) {
   return mapped.length ? mapped : [createTableConfig()];
 }
 
-function readTableConfigsFromDom() {
-  return Array.from(tableConfigList.querySelectorAll(".table-config-row")).map((row) => ({
-    id: row.dataset.configId || crypto.randomUUID(),
+function sheetChoicesFromRow(row) {
+  return Array.from(row.querySelectorAll('[data-field="sheetChoice"]'));
+}
+
+function availableSheetsFromRow(row) {
+  return sheetChoicesFromRow(row).map((input) => ({
+    sheetId: input.value,
+    title: input.dataset.title || input.value
+  }));
+}
+
+function readTableConfigsFromRow(row) {
+  const base = {
     name: row.querySelector('[data-field="name"]').value.trim(),
     url: row.querySelector('[data-field="url"]').value.trim(),
-    sheetId: row.querySelector('[data-field="sheetId"]').value.trim(),
     tableName: row.dataset.tableName || "",
-    sheetName: row.querySelector('[data-field="sheetId"]')?.selectedOptions?.[0]?.dataset.title || row.dataset.sheetName || "",
     resourceType: row.dataset.resourceType || "",
-    isDefault: Boolean(row.querySelector('[data-field="isDefault"]')?.checked),
     persisted: row.dataset.persisted === "true",
-    sheets: Array.from(row.querySelector('[data-field="sheetId"]')?.options || []).filter((option) => option.value).map((option) => ({
-      sheetId: option.value,
-      title: option.dataset.title || option.textContent
-    }))
-  }));
+    sheets: availableSheetsFromRow(row)
+  };
+  const selectedChoices = sheetChoicesFromRow(row).filter((input) => input.checked);
+  if (selectedChoices.length) {
+    return selectedChoices.map((input) => ({
+      ...base,
+      id: input.dataset.configId || crypto.randomUUID(),
+      sheetId: input.value,
+      sheetName: input.dataset.title || input.value,
+      noSheets: false,
+      isDefault: Boolean(row.querySelector(`[data-field="defaultSheet"][value="${CSS.escape(input.value)}"]`)?.checked)
+    }));
+  }
+  return [{
+    ...base,
+    id: row.dataset.configId || crypto.randomUUID(),
+    sheetId: "",
+    sheetName: "",
+    noSheets: row.dataset.noSheets === "true",
+    isDefault: Boolean(row.querySelector('[data-field="defaultNoSheet"]')?.checked)
+  }];
+}
+
+function readTableConfigsFromDom() {
+  return Array.from(tableConfigList.querySelectorAll(".table-config-row")).flatMap(readTableConfigsFromRow);
 }
 
 function sheetOptions(config) {
   const sheets = Array.isArray(config.sheets) ? config.sheets : [];
   if (!sheets.length && config.sheetId) return [{ sheetId: config.sheetId, title: config.sheetName || config.sheetId }];
   return sheets;
+}
+
+function createSheetChoice(sheet, { checked = false, isDefault = false, configId = "" } = {}) {
+  const choice = document.createElement("div");
+  choice.className = "sheet-choice";
+  const selectionLabel = document.createElement("label");
+  selectionLabel.className = "sheet-choice-main";
+  const checkbox = document.createElement("input");
+  checkbox.type = "checkbox";
+  checkbox.dataset.field = "sheetChoice";
+  checkbox.value = sheet.sheetId || sheet.tableId || "";
+  checkbox.dataset.title = sheet.title || checkbox.value;
+  checkbox.dataset.configId = configId || crypto.randomUUID();
+  checkbox.checked = checked;
+  const title = document.createElement("span");
+  title.className = "sheet-choice-title";
+  title.textContent = checkbox.dataset.title;
+  selectionLabel.append(checkbox, title);
+  const defaultLabel = document.createElement("label");
+  defaultLabel.className = "sheet-default-choice";
+  const defaultInput = document.createElement("input");
+  defaultInput.type = "radio";
+  defaultInput.name = "defaultWriteTable";
+  defaultInput.dataset.field = "defaultSheet";
+  defaultInput.value = checkbox.value;
+  defaultInput.checked = checked && isDefault;
+  defaultInput.disabled = !checked;
+  const defaultText = document.createElement("span");
+  defaultText.textContent = "默认";
+  defaultLabel.append(defaultInput, defaultText);
+  choice.append(selectionLabel, defaultLabel);
+  return choice;
 }
 
 function renderTableConfigs(configs = tableConfigs) {
@@ -154,6 +216,7 @@ function renderTableConfigs(configs = tableConfigs) {
     row.dataset.tableName = config.tableName || "";
     row.dataset.sheetName = config.sheetName || "";
     row.dataset.resourceType = config.resourceType || "";
+    row.dataset.noSheets = String(Boolean(config.noSheets));
     row.innerHTML = `
       <label>
         <span>备注</span>
@@ -169,17 +232,17 @@ function renderTableConfigs(configs = tableConfigs) {
       </div>
       <div class="detected-table-info${config.tableName ? " is-visible" : ""}" data-role="detectedInfo">
         <div><span>表格名称</span><strong data-role="tableName">等待检测</strong></div>
-        <label>
+        <div class="sheet-selector">
           <span>选择子表</span>
-          <select data-field="sheetId" ${config.tableName ? "" : "disabled"}>
-            <option value="">请选择子表</option>
-          </select>
-        </label>
-        <div class="table-config-save${config.tableName && config.sheetId ? " is-visible" : ""}" data-role="savePanel">
-          <label class="default-table-choice">
-            <input data-field="isDefault" name="defaultWriteTable" type="radio" />
+          <div class="sheet-choice-list" data-role="sheetChoices"></div>
+          <p class="sheet-empty-note${config.noSheets ? " is-visible" : ""}" data-role="sheetEmptyNote">未检测到子表，可直接保存当前表格。</p>
+        </div>
+        <div class="table-config-save${config.tableName && (config.sheetId || config.noSheets) ? " is-visible" : ""}" data-role="savePanel">
+          <label class="default-table-choice no-sheet-default${config.noSheets ? " is-visible" : ""}" data-role="noSheetDefault">
+            <input data-field="defaultNoSheet" name="defaultWriteTable" type="radio" />
             <span>设为默认写入表</span>
           </label>
+          <span class="multi-select-tip${sheetOptions(config).length > 1 ? " is-visible" : ""}" data-role="multiSelectTip">可勾选多个子表批量保存</span>
           <div class="table-save-action">
             <span class="saved-table-badge${config.persisted ? " is-visible" : ""}" data-role="savedBadge">已保存</span>
             <button data-action="save-table" type="button" class="compact">${config.persisted ? "更新该表配置" : "保存该表配置"}</button>
@@ -190,22 +253,22 @@ function renderTableConfigs(configs = tableConfigs) {
     row.querySelector('[data-field="name"]').value = config.name || "";
     row.querySelector('[data-field="url"]').value = config.url || "";
     row.querySelector('[data-role="tableName"]').textContent = config.tableName || "等待检测";
-    const select = row.querySelector('[data-field="sheetId"]');
+    const choices = row.querySelector('[data-role="sheetChoices"]');
     for (const sheet of sheetOptions(config)) {
-      const option = document.createElement("option");
-      option.value = sheet.sheetId || sheet.tableId || "";
-      option.textContent = sheet.title || option.value;
-      option.dataset.title = option.textContent;
-      select.append(option);
+      const sheetId = sheet.sheetId || sheet.tableId || "";
+      choices.append(createSheetChoice(sheet, {
+        checked: sheetId === config.sheetId,
+        isDefault: Boolean(config.isDefault),
+        configId: sheetId === config.sheetId ? config.id : ""
+      }));
     }
-    select.value = config.sheetId || "";
-    row.querySelector('[data-field="isDefault"]').checked = Boolean(config.isDefault);
+    row.querySelector('[data-field="defaultNoSheet"]').checked = Boolean(config.noSheets && config.isDefault);
     tableConfigList.append(row);
   });
 }
 
 function updateTableSavePanel(row) {
-  const selected = Boolean(row.dataset.tableName && row.querySelector('[data-field="sheetId"]').value);
+  const selected = Boolean(row.dataset.tableName && (row.dataset.noSheets === "true" || sheetChoicesFromRow(row).some((input) => input.checked)));
   row.querySelector('[data-role="savePanel"]').classList.toggle("is-visible", selected);
 }
 
@@ -221,29 +284,31 @@ async function inspectTableConfig(row) {
   try {
     const result = await chrome.runtime.sendMessage({ type: "INSPECT_FEISHU_TABLE_CONFIG", options: { feishuAppId: appId, feishuAppSecret: appSecret, feishuUrl: url } });
     if (!result?.ok) throw new Error(result?.message || "表格检测失败");
-    const select = row.querySelector('[data-field="sheetId"]');
-    select.textContent = "";
-    const placeholder = document.createElement("option");
-    placeholder.value = "";
-    placeholder.textContent = "请选择子表";
-    select.append(placeholder);
-    for (const sheet of result.sheets || []) {
-      const option = document.createElement("option");
-      option.value = sheet.sheetId;
-      option.textContent = sheet.title;
-      option.dataset.title = sheet.title;
-      select.append(option);
-    }
+    const sheets = result.sheets || [];
+    const choices = row.querySelector('[data-role="sheetChoices"]');
+    choices.textContent = "";
+    sheets.forEach((sheet, index) => choices.append(createSheetChoice(sheet, {
+      checked: sheets.length === 1,
+      configId: index === 0 ? row.dataset.configId : ""
+    })));
     row.dataset.tableName = result.tableName;
     row.dataset.resourceType = result.resourceType || "";
     row.dataset.sheetName = "";
+    row.dataset.noSheets = String(sheets.length === 0);
     row.querySelector('[data-role="tableName"]').textContent = row.dataset.tableName;
     row.querySelector('[data-role="detectedInfo"]').classList.add("is-visible");
-    select.disabled = false;
-    if ((result.sheets || []).length === 1) select.value = result.sheets[0].sheetId;
+    row.querySelector('[data-role="sheetEmptyNote"]').classList.toggle("is-visible", sheets.length === 0);
+    row.querySelector('[data-role="noSheetDefault"]').classList.toggle("is-visible", sheets.length === 0);
+    row.querySelector('[data-role="multiSelectTip"]').classList.toggle("is-visible", sheets.length > 1);
     row.dataset.persisted = "false";
     updateTableSavePanel(row);
-    setStatus(`检测通过：${row.dataset.tableName}。请选择子表，然后保存该表配置。`);
+    if (!sheets.length) {
+      setStatus(`检测通过：${row.dataset.tableName}。未发现子表，可直接保存当前表格。`);
+    } else if (sheets.length === 1) {
+      setStatus(`检测通过：${row.dataset.tableName}。已自动选择唯一子表，可直接保存。`);
+    } else {
+      setStatus(`检测通过：${row.dataset.tableName}。可勾选一个或多个子表后批量保存。`);
+    }
   } finally {
     button.disabled = false;
     button.textContent = "重新检测";
@@ -251,45 +316,52 @@ async function inspectTableConfig(row) {
 }
 
 async function saveTableConfig(row) {
-  const config = readTableConfigsFromDom().find((item) => item.id === row.dataset.configId);
+  const configs = readTableConfigsFromRow(row);
+  const draft = configs[0];
   if (!fields.feishuAppId.value.trim() || !fields.feishuAppSecret.value.trim()) throw new Error("请先填写飞书 App ID 和 App Secret。");
-  if (!config?.tableName) throw new Error("请先检测飞书表格链接。");
-  if (!config.sheetId) throw new Error("请先选择要保存的子表。");
+  if (!draft?.tableName) throw new Error("请先检测飞书表格链接。");
+  if (!draft.noSheets && !configs.some((config) => config.sheetId)) throw new Error("请至少勾选一个要保存的子表。");
 
   const saved = await chrome.storage.local.get(DEFAULT_OPTIONS);
   const savedConfigs = normalizeTableConfigs(tableConfigsForUi(saved));
-  const nextConfig = normalizeTableConfigs([config])[0];
-  let replaced = false;
-  let nextConfigs = savedConfigs.map((item) => {
-    const matches = item.id === nextConfig.id || (item.url === nextConfig.url && item.sheetId === nextConfig.sheetId);
-    if (!matches) return item;
-    replaced = true;
-    return nextConfig;
-  });
-  if (!replaced) nextConfigs.push(nextConfig);
-  if (nextConfig.isDefault) nextConfigs = nextConfigs.map((item) => ({ ...item, isDefault: false }));
-  if (nextConfig.isDefault) nextConfigs = nextConfigs.map((item) => item.id === nextConfig.id ? { ...item, isDefault: true } : item);
+  const nextBatch = normalizeTableConfigs(configs);
+  const batchKeys = new Set(nextBatch.map((config) => JSON.stringify([config.url, config.sheetId])));
+  let nextConfigs = savedConfigs.filter((item) => (
+    item.id !== row.dataset.configId
+    && !batchKeys.has(JSON.stringify([item.url, item.sheetId]))
+  ));
+  if (nextBatch.some((config) => config.isDefault)) nextConfigs = nextConfigs.map((item) => ({ ...item, isDefault: false }));
+  nextConfigs.push(...nextBatch);
+  const defaultConfig = nextConfigs.find((config) => config.isDefault);
 
   const next = {
     feishuAppId: fields.feishuAppId.value.trim(),
     feishuAppSecret: fields.feishuAppSecret.value.trim(),
     feishuTableConfigs: nextConfigs
   };
-  if (nextConfig.isDefault) {
-    next.feishuUrl = nextConfig.url;
-    next.feishuSheetId = nextConfig.sheetId;
-    fields.feishuUrl.value = nextConfig.url;
-    fields.feishuSheetId.value = nextConfig.sheetId;
+  if (defaultConfig) {
+    next.feishuUrl = defaultConfig.url;
+    next.feishuSheetId = defaultConfig.sheetId;
+    fields.feishuUrl.value = defaultConfig.url;
+    fields.feishuSheetId.value = defaultConfig.sheetId;
+  } else if (hasManagedDefault(saved)) {
+    next.feishuUrl = "";
+    next.feishuSheetId = "";
+    fields.feishuUrl.value = "";
+    fields.feishuSheetId.value = "";
   }
   await chrome.storage.local.set(next);
 
-  row.dataset.persisted = "true";
-  row.querySelector('[data-role="savedBadge"]').classList.add("is-visible");
-  row.querySelector('[data-action="save-table"]').textContent = "更新该表配置";
-  tableConfigs = readTableConfigsFromDom();
+  tableConfigs = ensureVisibleTableConfigs(nextConfigs);
+  renderTableConfigs(tableConfigs);
   refreshState({ ...currentOptions(), ...next });
-  const defaultText = nextConfig.isDefault ? "，并已设为默认写入表" : "";
-  setStatus(`已保存：${nextConfig.tableName} / ${nextConfig.sheetName || nextConfig.sheetId}${defaultText}。`);
+  const defaultText = nextBatch.some((config) => config.isDefault) ? "，并已设置默认写入表" : "";
+  if (nextBatch.length === 1) {
+    const config = nextBatch[0];
+    setStatus(`已保存：${config.tableName}${config.sheetName ? ` / ${config.sheetName}` : "（无子表）"}${defaultText}。`);
+  } else {
+    setStatus(`已批量保存 ${nextBatch.length} 个子表配置：${nextBatch.map((config) => config.sheetName || config.sheetId).join("、")}${defaultText}。`);
+  }
 }
 
 function currentOptions() {
@@ -298,8 +370,8 @@ function currentOptions() {
   return {
     feishuAppId: fields.feishuAppId.value.trim(),
     feishuAppSecret: fields.feishuAppSecret.value.trim(),
-    feishuUrl: defaultConfig?.url || fields.feishuUrl.value.trim(),
-    feishuSheetId: defaultConfig?.sheetId || fields.feishuSheetId.value.trim(),
+    feishuUrl: defaultConfig ? defaultConfig.url : fields.feishuUrl.value.trim(),
+    feishuSheetId: defaultConfig ? defaultConfig.sheetId : fields.feishuSheetId.value.trim(),
     detailFeishuUrl: fields.detailFeishuUrl.value.trim(),
     detailFeishuSheetId: fields.detailFeishuSheetId.value.trim(),
     detailTraverseAllSheets: detailTraverseAllSheets.checked,
@@ -387,8 +459,8 @@ async function loadOptions() {
 }
 
 async function saveOptions({ silent = false } = {}) {
-  const incompleteConfig = readTableConfigsFromDom().find((config) => config.url && (!config.tableName || !config.sheetId));
-  if (incompleteConfig) throw new Error(`表格配置“${incompleteConfig.name || incompleteConfig.url}”尚未检测或未选择子表。`);
+  const incompleteConfig = readTableConfigsFromDom().find((config) => config.url && (!config.tableName || (!config.sheetId && !config.noSheets)));
+  if (incompleteConfig) throw new Error(`表格配置“${incompleteConfig.name || incompleteConfig.url}”尚未检测或未勾选子表。`);
   const previous = await chrome.storage.local.get(DEFAULT_OPTIONS);
   const next = currentOptions();
   const shouldClearManagedDefault = hasManagedDefault(previous) && !next.feishuTableConfigs.some((config) => config.isDefault);
@@ -448,8 +520,8 @@ tableConfigList.addEventListener("input", (event) => {
     row.dataset.tableName = "";
     row.dataset.sheetName = "";
     row.dataset.resourceType = "";
+    row.dataset.noSheets = "false";
     row.querySelector('[data-role="detectedInfo"]').classList.remove("is-visible");
-    row.querySelector('[data-field="sheetId"]').disabled = true;
   }
   tableConfigs = readTableConfigsFromDom();
   refreshState();
@@ -467,7 +539,10 @@ tableConfigList.addEventListener("click", (event) => {
     saveTableConfig(row).catch((error) => setStatus(error.message, true));
     return;
   }
-  const next = readTableConfigsFromDom().filter((_, index) => index !== Number(row?.dataset.index || -1));
+  const removedIndex = Number(row?.dataset.index || -1);
+  const next = Array.from(tableConfigList.querySelectorAll(".table-config-row")).flatMap((item, index) => (
+    index === removedIndex ? [] : readTableConfigsFromRow(item)
+  ));
   renderTableConfigs(next);
   setStatus("已删除表格配置，点击“保存设置”后生效。");
 });
@@ -475,14 +550,18 @@ tableConfigList.addEventListener("click", (event) => {
 tableConfigList.addEventListener("change", (event) => {
   const row = event.target.closest(".table-config-row");
   if (!row) return;
-  if (event.target.matches('[data-field="sheetId"]')) {
-    row.dataset.sheetName = event.target.selectedOptions[0]?.dataset.title || "";
+  if (event.target.matches('[data-field="sheetChoice"]')) {
+    const defaultInput = row.querySelector(`[data-field="defaultSheet"][value="${CSS.escape(event.target.value)}"]`);
+    if (defaultInput) {
+      defaultInput.disabled = !event.target.checked;
+      if (!event.target.checked) defaultInput.checked = false;
+    }
     row.dataset.persisted = "false";
     row.querySelector('[data-role="savedBadge"]').classList.remove("is-visible");
     row.querySelector('[data-action="save-table"]').textContent = "保存该表配置";
     updateTableSavePanel(row);
   }
-  if (event.target.matches('[data-field="isDefault"]')) {
+  if (event.target.matches('[data-field="defaultSheet"], [data-field="defaultNoSheet"]')) {
     row.dataset.persisted = "false";
     row.querySelector('[data-role="savedBadge"]').classList.remove("is-visible");
     row.querySelector('[data-action="save-table"]').textContent = "保存该表配置";

@@ -255,6 +255,97 @@ h2::before {
   display: grid;
 }
 
+.sheet-selector {
+  display: grid;
+  gap: 7px;
+}
+
+.sheet-choice-list {
+  display: grid;
+  gap: 7px;
+  max-height: 220px;
+  overflow-y: auto;
+  padding-right: 3px;
+}
+
+.sheet-choice {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  margin: 0;
+  padding: 9px 10px;
+  border: 1px solid rgba(36, 93, 60, 0.16);
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.sheet-choice-main {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  margin: 0;
+}
+
+.sheet-choice-main > input,
+.sheet-default-choice input {
+  width: 17px;
+  min-height: 17px;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--forest);
+}
+
+.sheet-choice-title {
+  overflow-wrap: anywhere;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.sheet-default-choice {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--forest-deep);
+  font-size: 12px;
+  font-weight: 700;
+  margin: 0;
+}
+
+.sheet-default-choice input:disabled + span {
+  opacity: 0.45;
+}
+
+.sheet-empty-note {
+  display: none;
+  margin: 0;
+  padding: 10px 11px;
+  border: 1px dashed rgba(36, 93, 60, 0.28);
+  border-radius: 9px;
+  color: var(--forest-deep);
+  background: rgba(255, 255, 255, 0.55);
+  font-size: 13px;
+}
+
+.sheet-empty-note.is-visible,
+.multi-select-tip.is-visible,
+.no-sheet-default.is-visible {
+  display: inline-flex;
+}
+
+.multi-select-tip,
+.no-sheet-default {
+  display: none;
+}
+
+.multi-select-tip {
+  color: #53685b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .detected-table-info > div {
   display: grid;
   gap: 6px;
@@ -296,6 +387,14 @@ label > span {
   border-radius: 9px;
   background: rgba(255, 255, 255, 0.7);
   cursor: pointer;
+}
+
+.table-config-save .no-sheet-default {
+  display: none;
+}
+
+.table-config-save .no-sheet-default.is-visible {
+  display: inline-flex;
 }
 
 .default-table-choice input {

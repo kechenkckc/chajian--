@@ -122,6 +122,7 @@
       xhsUrl: xhsProfileUrl(userId),
       pgyUrl: pgyDetailUrl(userId),
       source: "xhs_profile",
+      acquisitionSources: [{ key: "xhs-profile", type: "xhs_profile", label: "小红书主页", acquiredAt: new Date().toISOString() }],
       categoryTags: [],
       categorySource: "pending",
       status: "预收藏",
@@ -148,6 +149,8 @@
       next[existingIndex] = {
         ...existing,
         ...record,
+        acquisitionSources: [...(existing.acquisitionSources || []), ...record.acquisitionSources]
+          .filter((entry, index, entries) => entry?.key && entries.findIndex((candidate) => candidate?.key === entry.key) === index),
         status: existing.status === "已写入飞书" || (Array.isArray(existing.feishuWriteHistory) && existing.feishuWriteHistory.length)
           ? "已写入飞书"
           : record.status,

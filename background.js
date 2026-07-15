@@ -111,6 +111,7 @@ const STANDARD_FIELDS = [
   "CPM",
   "CPE",
   "笔记类型",
+  "合作次数",
   "合作订单数",
   "已合作笔记数",
   "曝光中位数（日常）",
@@ -154,6 +155,7 @@ const FIELD_ALIASES = {
   "视频报价": ["视频报价", "视频笔记一口价", "视频笔记一口价(含平台服务费)", "视频笔记报价", "视频价格", "视频裸价", "报备视频裸价", "报备视频价格", "报备视频价格（不含平台服务费）", "报备视频价格 不含平台服务费", "视频价格（不含平台服务费）", "视频价格 不含平台服务费", "video_quote_price", "videoPrice"],
   "笔记类型": ["笔记类型", "内容形式", "note_type", "noteType", "contentType"],
   "博主类型": ["博主类型", "达人类型", "内容类型", "达人主类型", "账号主类型", "内容主类型", "主要内容形式", "主要笔记形式", "主发形式", "主发类型", "作品形式", "发布形式", "图文/视频", "图文或视频", "creator_type", "blogger_type", "primary_note_type", "primary_content_type"],
+  "合作次数": ["合作次数", "历史合作次数", "达人合作次数", "跨子表合作次数", "cooperation_count", "cooperationCount"],
   "合作订单数": ["合作订单数", "已合作订单数", "商单数", "商业笔记数", "cooperation_order_count", "progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt"],
   "已合作笔记数": ["已合作笔记数", "已合作笔记", "合作笔记数", "商业笔记数", "cooperation_note_count", "businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d", "progressOrderCnt"],
   "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "曝光量", "预估曝光量", "达人历史平均曝光量", "达人历史 平均曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
@@ -754,6 +756,47 @@ function rowMatchKeys(row) {
     .filter(Boolean);
 }
 
+function cooperationIdentityKeys(row) {
+  const keys = [];
+  const pgyUserId = extractPgyUserId(row);
+  if (pgyUserId) keys.push(`pgy:${normalizeKey(pgyUserId)}`);
+
+  const redId = valueByAliases(row || {}, "小红书号");
+  if (redId) keys.push(`xhs:${normalizeKey(redId)}`);
+
+  const profile = cellText(valueByAliases(row || {}, "主页链接") || row?.profile_url || "").trim();
+  const profileUserId = (profile.match(/\/user\/profile\/([^?/#]+)/i) || [])[1] || "";
+  if (profileUserId) keys.push(`profile:${normalizeKey(profileUserId)}`);
+
+  return [...new Set(keys.filter((key) => key && !key.endsWith(":")))];
+}
+
+function addRowToCooperationIndex(index, row, childId) {
+  if (!childId) return;
+  for (const key of cooperationIdentityKeys(row)) {
+    if (!index.has(key)) index.set(key, new Set());
+    index.get(key).add(childId);
+  }
+}
+
+function cooperationCountForRow(index, row, targetChildId) {
+  const keys = cooperationIdentityKeys(row);
+  if (!keys.length) return "";
+  const childIds = new Set();
+  for (const key of keys) {
+    for (const childId of index.get(key) || []) childIds.add(childId);
+  }
+  if (targetChildId) childIds.add(targetChildId);
+  return childIds.size;
+}
+
+function rowsWithCooperationCounts(rows, index, targetChildId) {
+  return (rows || []).map((row) => ({
+    ...row,
+    "合作次数": cooperationCountForRow(index, row, targetChildId)
+  }));
+}
+
 function parseFeishuUrl(url) {
   const parsed = new URL(String(url || "").trim());
   const parts = parsed.pathname.split("/").filter(Boolean);
@@ -941,9 +984,8 @@ async function inspectFeishuTableConfig(options) {
   const parsed = await resolveWikiTarget(initial, token);
   if (parsed.resourceType === "bitable") {
     const tables = await listBitableTables(token, parsed.token);
-    if (!tables.length) throw new Error("目标飞书多维表格没有可用子表。");
     const tableName = wikiTitle || await getFeishuDocumentTitle(token, parsed.token, "bitable");
-    if (!tableName) throw new Error("已读取子表，但未获取到飞书表格原始名称，请确认应用具备云文档读取权限。");
+    if (!tableName) throw new Error("已检测到飞书表格，但未获取到原始名称，请确认应用具备云文档读取权限。");
     return {
       ok: true,
       resourceType: "bitable",
@@ -953,9 +995,8 @@ async function inspectFeishuTableConfig(options) {
   }
   if (parsed.resourceType !== "sheet") throw new Error("当前仅支持飞书电子表格或多维表格。");
   const sheets = await listSheets(token, parsed.token);
-  if (!sheets.length) throw new Error("目标飞书电子表格没有可用子表。");
   const tableName = wikiTitle || await getFeishuDocumentTitle(token, parsed.token, "sheet");
-  if (!tableName) throw new Error("已读取子表，但未获取到飞书表格原始名称，请确认应用具备云文档读取权限。");
+  if (!tableName) throw new Error("已检测到飞书表格，但未获取到原始名称，请确认应用具备云文档读取权限。");
   return {
     ok: true,
     resourceType: "sheet",
@@ -1017,8 +1058,17 @@ function exportFieldsForRows(rows, options = {}) {
       return (rows || []).some((row) => nonEmptyCell(rowValueForMappedColumn(row, column)));
     })
     .map((column) => column.fieldName);
-  if ((rows || []).some((row) => nonEmptyCell(valueForCanonicalField(row, "自定义标签")))) {
+  if (options.forceTagColumn) {
+    fields.push("标签");
+  } else if ((rows || []).some((row) => nonEmptyCell(valueForCanonicalField(row, "自定义标签")))) {
     fields.push("自定义标签");
+  }
+  if ((rows || []).some((row) => nonEmptyCell(valueForCanonicalField(row, "合作次数"))) && !fields.includes("合作次数")) {
+    fields.push("合作次数");
+  }
+  for (const fieldName of Array.isArray(options.customFieldNames) ? options.customFieldNames : []) {
+    const cleanName = String(fieldName || "").trim();
+    if (cleanName && !fields.includes(cleanName)) fields.push(cleanName);
   }
   return fields;
 }
@@ -1070,7 +1120,7 @@ async function ensureMappedSheetShape(token, spreadsheetToken, sheetId, values, 
   const requiredFields = exportFieldsForRows(rows, options);
   if (!effectiveSheetWidth(values)) {
     await writeSheetHeader(token, spreadsheetToken, sheetId, rows);
-    return referenceExportShape();
+    return ensureMappedSheetShape(token, spreadsheetToken, sheetId, referenceExportHeaderRows(), rows, options);
   }
 
   let shape = detectSheetShape(values);
@@ -1619,6 +1669,7 @@ function semanticCanonicalFieldForHeader(header, context = "") {
   if (has(/曝光|展现|imp|impression|exposure/i)) return isCoop ? "曝光中位数（合作）" : "曝光中位数（日常）";
   if (has(/阅读|播放|read|view/i)) return isCoop ? "阅读中位数（合作）" : "阅读中位数（日常）";
   if (has(/互动|engage|interaction/i)) return isCoop ? "互动中位数（合作）" : "互动中位数（日常）";
+  if (has(/历史合作次数|达人合作次数|跨子表合作次数|cooperation_?count/i)) return "合作次数";
   if (has(/合作|商单|订单|order/i) && has(/数|量|count|cnt/i)) return "合作订单数";
   if (has(/合作|商单|商业/) && has(/笔记|note/) && has(/数|量|count|cnt/i)) return "已合作笔记数";
   if (has(/回复率|48h|48小时|response|reply/i)) return "邀约48h回复率";
@@ -2622,26 +2673,27 @@ function rowForMappedFields(row, mappedFields) {
 
 async function syncRowsToBitable({ token, parsed, rows, options }) {
   const preferredTableId = options.feishuSheetId || parsed.tableId || "";
-  let tableId = "";
+  const tables = await listBitableTables(token, parsed.token);
+  if (!tables.length) throw new Error("目标飞书多维表格没有可写入的数据表。");
+  let tableId = tables[0]?.table_id || tables[0]?.id || "";
   if (preferredTableId) {
-    tableId = await chooseBitableTable(token, parsed.token, preferredTableId);
-  } else {
-    const tables = await listBitableTables(token, parsed.token);
-    if (!tables.length) throw new Error("目标飞书多维表格没有可写入的数据表。");
-    if (tables.length > 1 && !options.syncUseFirstSheet) {
-      throw new Error(`检测到 ${tables.length} 个数据表，请填写同步子表 ID，或勾选“使用首个子表”。`);
-    }
-    tableId = tables[0]?.table_id || tables[0]?.id || "";
+    const selected = tables.find((table) => [table.table_id, table.id].includes(preferredTableId));
+    if (!selected) throw new Error("链接或配置里的飞书多维表格 table ID 不存在。");
+    tableId = selected.table_id || selected.id;
+  } else if (tables.length > 1 && !options.syncUseFirstSheet) {
+    throw new Error(`检测到 ${tables.length} 个数据表，请填写同步子表 ID，或勾选“使用首个子表”。`);
   }
-  const mappedFields = await ensureMappedBitableFields(token, parsed.token, tableId, rows, options);
-  const records = await readBitableRecords(token, parsed.token, tableId);
+  const cooperationSnapshot = await buildBitableCooperationIndex(token, parsed.token, tables);
+  const countedRows = rowsWithCooperationCounts(rows, cooperationSnapshot.index, tableId);
+  const mappedFields = await ensureMappedBitableFields(token, parsed.token, tableId, countedRows, options);
+  const records = cooperationSnapshot.recordsByTableId.get(tableId) || [];
   const updateExisting = Boolean(options.syncUpdateExisting);
   const newRows = [];
   const handledRecordIds = new Set();
   let updatedCount = 0;
   let skippedCount = 0;
 
-  for (const row of rows) {
+  for (const row of countedRows) {
     const existing = records.find((record) => rowMatchesAny(row, record.fields || {}));
     if (!existing) {
       if (newRows.some((newRow) => rowMatchesAny(row, newRow))) {
@@ -2687,6 +2739,7 @@ async function syncRowsToBitable({ token, parsed, rows, options }) {
     updatedCount,
     skippedCount,
     inputCount: rows.length,
+    cooperationInspectedChildCount: cooperationSnapshot.inspectedChildCount,
     result
   };
 }
@@ -2705,6 +2758,41 @@ async function readBitableRecords(token, appToken, tableId) {
   return records;
 }
 
+async function buildBitableCooperationIndex(token, appToken, tables) {
+  const index = new Map();
+  const recordsByTableId = new Map();
+  const inspectedTableIds = new Set();
+  for (const table of tables || []) {
+    const tableId = table?.table_id || table?.id || "";
+    if (!tableId || inspectedTableIds.has(tableId)) continue;
+    inspectedTableIds.add(tableId);
+    const records = await readBitableRecords(token, appToken, tableId);
+    recordsByTableId.set(tableId, records);
+    for (const record of records) addRowToCooperationIndex(index, record?.fields || {}, tableId);
+  }
+  return { index, recordsByTableId, inspectedChildCount: inspectedTableIds.size };
+}
+
+async function buildSheetCooperationIndex(token, spreadsheetToken, sheets) {
+  const index = new Map();
+  const valuesBySheetId = new Map();
+  const inspectedSheetIds = new Set();
+  for (const sheet of sheets || []) {
+    const sheetId = sheet?.sheet_id || sheet?.id || "";
+    if (!sheetId || inspectedSheetIds.has(sheetId)) continue;
+    inspectedSheetIds.add(sheetId);
+    const values = await readSheetValuesFlexible(token, spreadsheetToken, sheetId);
+    valuesBySheetId.set(sheetId, values);
+    const shape = detectSheetShape(values);
+    const items = sheetRowsToShapeObjects(values, shape);
+    for (const item of items) {
+      if (!Object.values(item.row || {}).some(nonEmptyCell)) continue;
+      addRowToCooperationIndex(index, item.row, sheetId);
+    }
+  }
+  return { index, valuesBySheetId, inspectedChildCount: inspectedSheetIds.size };
+}
+
 function googleSheetCsvUrl(value) {
   const parsed = new URL(String(value || "").trim());
   if (parsed.hostname !== "docs.google.com") return parsed.toString();
@@ -2714,7 +2802,7 @@ function googleSheetCsvUrl(value) {
   return `https://docs.google.com/spreadsheets/d/${spreadsheetId}/export?format=csv&gid=${encodeURIComponent(gid)}`;
 }
 
-async function readOnlineCreatorTable(url) {
+async function inspectOnlineCreatorTable(url) {
   const cleanUrl = String(url || "").trim();
   if (!cleanUrl) throw new Error("请填写在线表格地址。");
   const parsedUrl = new URL(cleanUrl);
@@ -2724,14 +2812,77 @@ async function readOnlineCreatorTable(url) {
     const token = await tenantToken(options.feishuAppId, options.feishuAppSecret);
     const target = await resolveWikiTarget(parseFeishuUrl(cleanUrl), token);
     if (target.resourceType === "bitable") {
-      const tableId = await chooseBitableTable(token, target.token, target.tableId || "");
-      const records = await readBitableRecords(token, target.token, tableId);
-      return { ok: true, source: "飞书多维表格", rows: records.map((record) => record.fields || {}) };
+      const tables = await listBitableTables(token, target.token);
+      return {
+        ok: true,
+        source: "飞书多维表格",
+        resourceType: "bitable",
+        preferredId: target.tableId || "",
+        sheets: tables.map((table) => ({
+          id: table.table_id || table.id,
+          title: table.name || table.title || table.table_id || table.id
+        })).filter((table) => table.id)
+      };
     }
     if (target.resourceType !== "sheet") throw new Error("该飞书链接不是电子表格或多维表格。");
-    const sheetId = await chooseSheet(token, target.token, target.sheetId || "");
-    const matrix = await readSheetValuesFlexible(token, target.token, sheetId);
-    return { ok: true, source: "飞书电子表格", matrix };
+    const sheets = await listSheets(token, target.token);
+    return {
+      ok: true,
+      source: "飞书电子表格",
+      resourceType: "sheet",
+      preferredId: target.sheetId || "",
+      sheets: sheets.map((sheet) => ({
+        id: sheet.sheet_id || sheet.id,
+        title: sheet.title || sheet.name || sheet.sheet_id || sheet.id
+      })).filter((sheet) => sheet.id)
+    };
+  }
+  return {
+    ok: true,
+    source: parsedUrl.hostname === "docs.google.com" ? "Google Sheets" : "公开 CSV",
+    resourceType: "csv",
+    preferredId: "online-csv",
+    sheets: [{ id: "online-csv", title: "当前在线表格" }]
+  };
+}
+
+async function readOnlineCreatorTable(url, selectedSheetIds = []) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl) throw new Error("请填写在线表格地址。");
+  const parsedUrl = new URL(cleanUrl);
+  const requestedIds = Array.from(new Set((Array.isArray(selectedSheetIds) ? selectedSheetIds : []).map((id) => String(id || "").trim()).filter(Boolean)));
+  if (parsedUrl.hostname.endsWith("feishu.cn") || parsedUrl.hostname.endsWith("larksuite.com")) {
+    if (!requestedIds.length) throw new Error("请至少选择一个子表。");
+    const options = await chrome.storage.local.get({ feishuAppId: "", feishuAppSecret: "" });
+    if (!options.feishuAppId || !options.feishuAppSecret) throw new Error("读取飞书在线表格前，请先在飞书配置页填写 App ID 和 App Secret。");
+    const token = await tenantToken(options.feishuAppId, options.feishuAppSecret);
+    const target = await resolveWikiTarget(parseFeishuUrl(cleanUrl), token);
+    if (target.resourceType === "bitable") {
+      const tables = await listBitableTables(token, target.token);
+      const tableMap = new Map(tables.map((table) => [table.table_id || table.id, table]));
+      const datasets = [];
+      for (const tableId of requestedIds) {
+        const table = tableMap.get(tableId);
+        if (!table) throw new Error(`选择的子表不存在：${tableId}`);
+        const records = await readBitableRecords(token, target.token, tableId);
+        datasets.push({ id: tableId, title: table.name || table.title || tableId, rows: records.map((record) => record.fields || {}) });
+      }
+      return { ok: true, source: "飞书多维表格", datasets };
+    }
+    if (target.resourceType !== "sheet") throw new Error("该飞书链接不是电子表格或多维表格。");
+    const sheets = await listSheets(token, target.token);
+    const sheetMap = new Map(sheets.map((sheet) => [sheet.sheet_id || sheet.id, sheet]));
+    const datasets = [];
+    for (const sheetId of requestedIds) {
+      const sheet = sheetMap.get(sheetId);
+      if (!sheet) throw new Error(`选择的子表不存在：${sheetId}`);
+      datasets.push({
+        id: sheetId,
+        title: sheet.title || sheet.name || sheetId,
+        matrix: await readSheetValuesFlexible(token, target.token, sheetId)
+      });
+    }
+    return { ok: true, source: "飞书电子表格", datasets };
   }
   const response = await fetch(googleSheetCsvUrl(cleanUrl), { redirect: "follow" });
   if (!response.ok) throw new Error(`在线表格读取失败：HTTP ${response.status}`);
@@ -2739,7 +2890,11 @@ async function readOnlineCreatorTable(url) {
   if (/spreadsheetml|application\/zip|octet-stream/i.test(contentType)) {
     throw new Error("在线地址返回的是 XLSX 文件，请先下载后使用“导入表格”。在线导入支持公开 CSV 和 Google Sheets。");
   }
-  return { ok: true, source: parsedUrl.hostname === "docs.google.com" ? "Google Sheets" : "公开 CSV", csv: await response.text() };
+  return {
+    ok: true,
+    source: parsedUrl.hostname === "docs.google.com" ? "Google Sheets" : "公开 CSV",
+    datasets: [{ id: "online-csv", title: "当前在线表格", csv: await response.text() }]
+  };
 }
 
 function bitableRecordToDetailItem(record) {
@@ -2878,20 +3033,21 @@ async function syncRowsToFeishu({ rows, options }) {
   if (parsed.resourceType === "bitable") return syncRowsToBitable({ token, parsed, rows, options });
   if (parsed.resourceType !== "sheet") throw new Error("同步达人当前仅支持飞书电子表格或多维表格。");
   const preferredSheetId = options.feishuSheetId || parsed.sheetId || "";
-  let sheetId = "";
+  const sheets = await listSheets(token, parsed.token);
+  if (!sheets.length) throw new Error("目标飞书电子表格没有可写入的子表。");
+  let sheetId = sheets[0]?.sheet_id || sheets[0]?.id || "";
   if (preferredSheetId) {
-    sheetId = await chooseSheet(token, parsed.token, preferredSheetId);
-  } else {
-    const sheets = await listSheets(token, parsed.token);
-    if (!sheets.length) throw new Error("目标飞书电子表格没有可写入的子表。");
-    if (sheets.length > 1 && !options.syncUseFirstSheet) {
-      throw new Error(`检测到 ${sheets.length} 个子表，请填写同步子表 ID，或勾选“使用首个子表”。`);
-    }
-    sheetId = sheets[0]?.sheet_id || sheets[0]?.id || "";
+    const selected = sheets.find((sheet) => [sheet.sheet_id, sheet.id].includes(preferredSheetId));
+    if (!selected) throw new Error("链接或配置里的飞书子表 ID 不存在。");
+    sheetId = selected.sheet_id || selected.id;
+  } else if (sheets.length > 1 && !options.syncUseFirstSheet) {
+    throw new Error(`检测到 ${sheets.length} 个子表，请填写同步子表 ID，或勾选“使用首个子表”。`);
   }
-  const beforeValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
+  const cooperationSnapshot = await buildSheetCooperationIndex(token, parsed.token, sheets);
+  const countedRows = rowsWithCooperationCounts(rows, cooperationSnapshot.index, sheetId);
+  const beforeValues = cooperationSnapshot.valuesBySheetId.get(sheetId) || [];
   const beforeRowCount = nonEmptyDataRowCount(beforeValues);
-  const shape = await ensureMappedSheetShape(token, parsed.token, sheetId, beforeValues, rows, options);
+  const shape = await ensureMappedSheetShape(token, parsed.token, sheetId, beforeValues, countedRows, options);
   const latestValues = await readSheetValuesFlexible(token, parsed.token, sheetId);
   const latestShape = detectSheetShape(latestValues);
   const sheetItems = sheetRowsToShapeObjects(latestValues, latestShape).filter((item) => Object.values(item.row || {}).some(nonEmptyCell));
@@ -2900,7 +3056,7 @@ async function syncRowsToFeishu({ rows, options }) {
   const handledRowNumbers = new Set();
   let updatedCount = 0;
   let skippedCount = 0;
-  for (const row of rows) {
+  for (const row of countedRows) {
     const existing = sheetItems.find((item) => rowMatchesAny(row, item.row));
     if (!existing) {
       if (newRows.some((newRow) => rowMatchesAny(row, newRow))) {
@@ -2961,6 +3117,7 @@ async function syncRowsToFeishu({ rows, options }) {
     updatedCount,
     skippedCount,
     inputCount: rows.length,
+    cooperationInspectedChildCount: cooperationSnapshot.inspectedChildCount,
     actualWrittenCount,
     beforeRowCount,
     afterRowCount,
@@ -3453,8 +3610,34 @@ function mergeDetailApiCache(detail, apiCache) {
     const organizationName = cleanJsonText(firstDefined(profile.mcnName, profile.mcn_name, profile.agencyName, profile.organizationName, profile.orgName, profile.companyName, profile.bloggerCompany));
     if (organizationName) result.organization_name = organizationName;
   }
-  if (profile.fansCount !== undefined && !result.followers_count) result.followers_count = numericValue(profile.fansCount);
-  if (profile.likeCollectCountInfo !== undefined && !result.liked_collected_count) result.liked_collected_count = numericValue(profile.likeCollectCountInfo);
+  const followersCount = positiveCountValue(
+    detailProfile.fansNum,
+    detailProfile.fansCount,
+    detailProfile.fans_count,
+    detailProfile.followerCount,
+    detailProfile.followersCount,
+    detailProfile.followers,
+    listProfile.fansNum,
+    listProfile.fansCount,
+    listProfile.fans_count,
+    listProfile.followerCount,
+    listProfile.followersCount,
+    listProfile.followers,
+    fallbackFollowersValue({ raw_payload: cache })
+  );
+  if (followersCount !== "" && !result.followers_count) result.followers_count = followersCount;
+  const likedCollectedCount = positiveCountValue(
+    detailProfile.likeCollectCountInfo,
+    detailProfile.likedCollectedCount,
+    detailProfile.likeCollectCount,
+    detailProfile.likeAndCollectCount,
+    listProfile.likeCollectCountInfo,
+    listProfile.likedCollectedCount,
+    listProfile.likeCollectCount,
+    listProfile.likeAndCollectCount,
+    fallbackLikedCollectedValue({ raw_payload: cache })
+  );
+  if (likedCollectedCount !== "" && !result.liked_collected_count) result.liked_collected_count = likedCollectedCount;
   if (profile.picturePrice !== undefined && !result.quote_price) result.quote_price = numericValue(profile.picturePrice);
   if (profile.videoPrice !== undefined && !result.video_quote_price) result.video_quote_price = numericValue(profile.videoPrice);
   if (dailyRate.noteType !== undefined && !result.note_type) result.note_type = dailyRate.noteType;
@@ -4267,7 +4450,18 @@ function countTextFromPgyValue(value) {
   return Math.round(number).toLocaleString("zh-CN");
 }
 
-function preFavoriteCategoryTags(profile = {}) {
+function positiveCountValue(...values) {
+  let zeroValue = "";
+  for (const value of values) {
+    const number = numericValue(value);
+    if (typeof number !== "number" || !Number.isFinite(number) || number < 0) continue;
+    if (number > 0) return number;
+    zeroValue = 0;
+  }
+  return zeroValue;
+}
+
+function preFavoriteCategoryTags(...profiles) {
   const tags = [];
   const addTag = (value) => {
     const text = cleanJsonText(value);
@@ -4284,28 +4478,37 @@ function preFavoriteCategoryTags(profile = {}) {
     if (value && typeof value === "object") {
       const direct = firstDefined(value.taxonomy1Tag, value.categoryName, value.name, value.label, value.contentTag);
       if (direct) addTag(direct);
-      else addCategory(firstDefined(value.children, value.tags));
+      addCategory(value.taxonomy2Tags);
+      addCategory(value.children);
+      addCategory(value.tags);
       return;
     }
     addTag(value);
   };
-  addCategory(profile.contentTags);
-  addCategory(profile.top2CategoryList);
-  if (!tags.length) addCategory(firstDefined(profile.categoryName, profile.category));
-  return tags.slice(0, 5);
+  for (const profile of profiles) {
+    if (!profile || typeof profile !== "object") continue;
+    addCategory(profile.contentTags);
+    addCategory(profile.top2CategoryList);
+    addCategory(firstDefined(profile.categoryName, profile.category));
+  }
+  return tags.slice(0, 30);
 }
 
 function preFavoritePatchFromApiCache(userId, apiCache) {
-  const profile = apiCache?.cache?.blogger_profile || {};
+  const detailProfile = apiCache?.cache?.blogger_profile || {};
+  const listProfile = apiCache?.cache?.blogger_list_profile || {};
+  const profile = { ...detailProfile, ...listProfile };
   const detail = mergeDetailApiCache({ pgy_blogger_id: userId }, apiCache);
   const redId = cleanJsonText(firstDefined(profile.redId, profile.red_id, profile.redID, profile.redBookId, profile.redbookId, profile.red_book_id, profile.xiaohongshuId, profile.xiaohongshu_id));
-  const categoryTags = preFavoriteCategoryTags(profile);
+  const categoryTags = preFavoriteCategoryTags(detailProfile, listProfile);
   const patch = {
     userId,
     categoryTags,
     categorySource: "pgy_profile",
     quoteStatus: "报价已获取",
     quoteFetchedAt: new Date().toISOString(),
+    lastDataRefreshAt: new Date().toISOString(),
+    lastRefreshFailedAt: "",
     updatedAt: new Date().toISOString()
   };
   const name = cleanJsonText(firstDefined(profile.name, profile.nickName, profile.nickname));
@@ -4315,9 +4518,37 @@ function preFavoritePatchFromApiCache(userId, apiCache) {
   if (redId) patch.redId = redId;
   const location = cleanJsonText(firstDefined(profile.location, profile.ipLocation, profile.ip_city, profile.city));
   if (location) patch.location = location;
-  const followersText = countTextFromPgyValue(firstDefined(profile.fansNum, profile.fansCount, profile.fans_count, profile.followerCount, profile.followersCount, profile.followers));
+  const followersCount = positiveCountValue(
+    detailProfile.fansNum,
+    detailProfile.fansCount,
+    detailProfile.fans_count,
+    detailProfile.followerCount,
+    detailProfile.followersCount,
+    detailProfile.followers,
+    listProfile.fansNum,
+    listProfile.fansCount,
+    listProfile.fans_count,
+    listProfile.followerCount,
+    listProfile.followersCount,
+    listProfile.followers,
+    fallbackFollowersValue({ raw_payload: apiCache?.cache || {} })
+  );
+  const followersText = countTextFromPgyValue(followersCount);
+  if (followersCount !== "") patch.followersCount = followersCount;
   if (followersText) patch.followersText = followersText;
-  const likesText = countTextFromPgyValue(firstDefined(profile.likeCollectCountInfo, profile.likedCollectedCount, profile.likeCollectCount, profile.likeAndCollectCount, profile.likedCount));
+  const likesText = countTextFromPgyValue(positiveCountValue(
+    detailProfile.likeCollectCountInfo,
+    detailProfile.likedCollectedCount,
+    detailProfile.likeCollectCount,
+    detailProfile.likeAndCollectCount,
+    detailProfile.likedCount,
+    listProfile.likeCollectCountInfo,
+    listProfile.likedCollectedCount,
+    listProfile.likeCollectCount,
+    listProfile.likeAndCollectCount,
+    listProfile.likedCount,
+    fallbackLikedCollectedValue({ raw_payload: apiCache?.cache || {} })
+  ));
   if (likesText) patch.likesText = likesText;
   const picturePriceText = priceTextFromPgyValue(firstDefined(profile.picturePrice, profile.price, profile.quotePrice, profile.imageQuotePrice, profile.picPrice));
   if (picturePriceText) patch.picturePriceText = picturePriceText;
@@ -4333,6 +4564,19 @@ function preFavoritePatchFromApiCache(userId, apiCache) {
   if (cooperationNoteCount !== "") patch.cooperationNoteCount = cooperationNoteCount;
   if (!picturePriceText && !videoPriceText) patch.quoteStatus = "报价未返回";
   return patch;
+}
+
+function hasPreFavoriteProfileData(patch) {
+  return Boolean(
+    patch?.name
+    || patch?.avatar
+    || patch?.redId
+    || patch?.followersText
+    || patch?.likesText
+    || patch?.picturePriceText
+    || patch?.videoPriceText
+    || patch?.categoryTags?.length
+  );
 }
 
 async function enrichPreFavoriteQuote({ userId }) {
@@ -4354,6 +4598,7 @@ async function enrichPreFavoriteQuote({ userId }) {
   }
   if (!apiCache?.ok) throw new Error(apiCache?.message || "蒲公英报价接口读取失败，请确认已登录蒲公英。");
   const patch = preFavoritePatchFromApiCache(cleanUserId, apiCache);
+  if (!hasPreFavoriteProfileData(patch)) throw new Error("蒲公英未返回有效达人数据，请确认已登录后重试。");
   const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
   const favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
   const next = favorites.map((item) => item?.userId === cleanUserId ? { ...item, ...patch } : item);
@@ -4400,6 +4645,7 @@ async function refreshAllPreFavorites({ userIds = [] } = {}) {
         const apiCache = await fetchFastDetailApiCacheFromTab(tab.id, userId);
         if (!apiCache?.ok) throw new Error(apiCache?.message || "蒲公英接口未返回达人数据");
         const patch = preFavoritePatchFromApiCache(userId, apiCache);
+        if (!hasPreFavoriteProfileData(patch)) throw new Error("蒲公英未返回有效达人数据，请确认已登录后重试");
         favorites = favorites.map((item) => cleanPgyUserId(item?.userId) === userId ? { ...item, ...patch } : item);
         completed += 1;
       } catch (error) {
@@ -4675,7 +4921,17 @@ async function collectCurrentDetailPayload(tab, index = 0, options = {}) {
 }
 
 function detailFavoriteOptions(options) {
-  return { ...(options || {}) };
+  const source = { ...(options || {}) };
+  const targetUrl = String(source.detailFeishuUrl || source.favoriteFeishuUrl || source.feishuUrl || "").trim();
+  let targetSheetId = "";
+  if (source.detailFeishuUrl) targetSheetId = source.detailFeishuSheetId || "";
+  else if (source.favoriteFeishuUrl) targetSheetId = source.favoriteFeishuSheetId || "";
+  else targetSheetId = source.feishuSheetId || "";
+  return {
+    ...source,
+    detailFeishuUrl: targetUrl,
+    detailFeishuSheetId: String(targetSheetId || "").trim()
+  };
 }
 
 function rowForDetailPayload(payload) {
@@ -4834,6 +5090,8 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
     feishuAppSecret: "",
     feishuUrl: "",
     feishuSheetId: "",
+    favoriteFeishuUrl: "",
+    favoriteFeishuSheetId: "",
     detailFeishuUrl: "",
     detailFeishuSheetId: "",
     detailTraverseAllSheets: false,
@@ -4844,7 +5102,7 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
   const appId = mergedOptions.feishuAppId;
   const appSecret = mergedOptions.feishuAppSecret;
   const feishuUrl = mergedOptions.detailFeishuUrl;
-  if (!appId || !appSecret || !feishuUrl) throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
+  if (!appId || !appSecret || !feishuUrl) throw new Error("请先配置飞书 App ID、App Secret，并选择收藏目标表、详情表或同步表。");
   const token = await tenantToken(appId, appSecret);
   const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
   if (parsed.resourceType === "bitable") {
@@ -4865,14 +5123,20 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
 
 async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 }) {
   rowFromDetailUrl(url);
+  detailStopRequested = false;
   const saved = await chrome.storage.local.get({
     feishuAppId: "",
     feishuAppSecret: "",
-    detailFeishuUrl: ""
+    feishuUrl: "",
+    feishuSheetId: "",
+    favoriteFeishuUrl: "",
+    favoriteFeishuSheetId: "",
+    detailFeishuUrl: "",
+    detailFeishuSheetId: ""
   });
-  const mergedOptions = { ...saved, ...(options || {}) };
+  const mergedOptions = detailFavoriteOptions({ ...saved, ...(options || {}) });
   if (!mergedOptions.feishuAppId || !mergedOptions.feishuAppSecret || !mergedOptions.detailFeishuUrl) {
-    throw new Error("请先在侧边栏填写飞书 App ID、App Secret 和需补足详情的飞书表格。");
+    throw new Error("请先配置飞书 App ID、App Secret，并选择收藏目标表、详情表或同步表。");
   }
   const userId = (url.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
   const task = favoriteCurrentDetailToFeishu({ tab: { id: -1, url }, options: mergedOptions })
@@ -5584,7 +5848,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     if (message?.type === "READ_ONLINE_CREATOR_TABLE") {
-      const result = await readOnlineCreatorTable(message.url || "");
+      const result = await readOnlineCreatorTable(message.url || "", message.sheetIds || []);
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "LIST_ONLINE_CREATOR_TABLE_SHEETS") {
+      const result = await inspectOnlineCreatorTable(message.url || "");
       sendResponse(result);
       return;
     }
@@ -5605,7 +5874,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "OPEN_SIDE_PANEL") {
       if (!chrome.sidePanel?.open) {
-        throw new Error("当前浏览器不支持打开侧边栏，请点击扩展图标打开。");
+        throw new Error("当前浏览器不支持打开更多功能，请点击扩展图标打开。");
       }
       let windowId = sender?.tab?.windowId;
       if (typeof windowId !== "number") {
@@ -5627,7 +5896,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({ ok: true });
         return;
       }
-      throw new Error("无法定位当前页面，请点击扩展图标打开侧边栏。");
+      throw new Error("无法定位当前页面，请点击扩展图标打开更多功能。");
     }
   })().catch((error) => sendResponse({ ok: false, message: messageWithFeishuLinks(error) }));
   return true;

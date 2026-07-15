@@ -24,7 +24,7 @@
       <section class="band" data-index="01">
         <div class="section-head">
           <div>
-            <h2>导出当前达人</h2>
+            <h2>导出为表格</h2>
             <p class="hint">导出当前筛选条件下的达人为表格，勾选后会在导出完成后直接写回飞书。</p>
           </div>
         </div>
@@ -35,16 +35,16 @@
           <span>导出后直接写回飞书</span>
         </label>
         <p id="exportHint" class="supporting"></p>
-        <div class="actions">
-          <button id="stopExportBtn" type="button">停止采集</button>
-          <button id="exportBtn" type="button" class="primary">导出当前达人</button>
+        <div class="actions collection-actions">
+          <button id="exportBtn" type="button" class="primary">导出为表格</button>
+          <button id="stopExportBtn" type="button" class="compact-stop" hidden>停止采集</button>
         </div>
       </section>
 
       <section class="band" data-index="02">
         <div class="section-head">
           <div>
-            <h2>直接采集达人到飞书</h2>
+            <h2>直采达人到飞书</h2>
           </div>
         </div>
         <div class="segmented" role="tablist" aria-label="同步来源">
@@ -80,7 +80,7 @@
         <p id="syncHint" class="supporting"></p>
         <div class="actions">
           <button id="syncValidateBtn" type="button">检测写入</button>
-          <button id="syncBtn" type="button" class="primary">直接采集达人到飞书</button>
+          <button id="syncBtn" type="button" class="primary">直采达人到飞书</button>
         </div>
       </section>
 
@@ -112,7 +112,7 @@
         <div class="actions">
           <button id="detailValidateBtn" type="button">选定这个表</button>
           <button id="stopDetailBtn" type="button">停止补足</button>
-          <button id="openFavoritesBtn" type="button">预收藏达人库</button>
+          <button id="openFavoritesBtn" type="button">达人库</button>
           <button id="backfillBtn" type="button" class="primary">补足详情</button>
         </div>
       </section>
