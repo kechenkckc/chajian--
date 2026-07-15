@@ -125,6 +125,7 @@ const STANDARD_FIELDS = [
   "视频预估互动单价",
   "邀约48h回复率",
   "账号类型",
+  "自定义标签",
   "IP城市",
   "数据来源",
   "采集时间",
@@ -170,7 +171,8 @@ const FIELD_ALIASES = {
   "CPM": ["CPM", "cpm", "CPM（视频）", "CPM（图文）", "视频CPM", "图文CPM", "estimatePictureCpm", "estimateVideoCpm"],
   "CPE": ["CPE", "cpe", "互动成本", "互动单价", "CPE（视频）", "CPE（图文）", "视频CPE", "图文CPE"],
   "邀约48h回复率": ["邀约48h回复率", "邀约48小时回复率", "回复率", "reply_rate_48h", "inviteReply48hNumRatio", "responseRate", "replyRate48h"],
-  "账号类型": ["账号类型", "达人标签", "博主类目", "博主标签", "账号标签", "内容标签", "creator_category", "categoryName", "category", "contentTags", "tradeType", "industryTag", "type"],
+  "账号类型": ["账号类型", "博主类目", "博主标签", "账号标签", "内容标签", "creator_category", "categoryName", "category", "contentTags", "tradeType", "industryTag", "type"],
+  "自定义标签": ["自定义标签", "标签", "达人标签", "用户标签", "customTags", "custom_tags"],
   "IP城市": ["IP城市", "城市", "地域", "地理位置", "ip_city", "location", "city"],
   "所属机构": ["所属机构", "机构", "MCN", "mcnName", "mcn_name", "agencyName", "organizationName", "orgName", "companyName", "bloggerCompany", "organization_name"],
   "数据来源": ["数据来源", "source"],
@@ -1008,13 +1010,17 @@ async function readSheetValuesFlexible(token, spreadsheetToken, sheetId) {
 
 function exportFieldsForRows(rows, options = {}) {
   const detailFieldSet = new Set(DETAIL_FIELDS);
-  return REFERENCE_EXPORT_COLUMNS
+  const fields = REFERENCE_EXPORT_COLUMNS
     .filter((column) => {
       if (!detailFieldSet.has(column.canonicalField)) return true;
       if (options.collectionMode === "fast") return false;
       return (rows || []).some((row) => nonEmptyCell(rowValueForMappedColumn(row, column)));
     })
     .map((column) => column.fieldName);
+  if ((rows || []).some((row) => nonEmptyCell(valueForCanonicalField(row, "自定义标签")))) {
+    fields.push("自定义标签");
+  }
+  return fields;
 }
 
 async function writeSheetHeader(token, spreadsheetToken, sheetId, rows) {
@@ -1616,6 +1622,7 @@ function semanticCanonicalFieldForHeader(header, context = "") {
   if (has(/合作|商单|订单|order/i) && has(/数|量|count|cnt/i)) return "合作订单数";
   if (has(/合作|商单|商业/) && has(/笔记|note/) && has(/数|量|count|cnt/i)) return "已合作笔记数";
   if (has(/回复率|48h|48小时|response|reply/i)) return "邀约48h回复率";
+  if (leafHas(/^(标签|达人标签|自定义标签|用户标签|custom_?tags?)$/i)) return "自定义标签";
   const creatorTypeSubject = has(/博主|达人|账号|作者|创作者|creator|blogger|kol/i);
   const creatorTypeMeaning = has(/主类型|主要类型|主发|主做|主攻|内容形式|笔记形式|作品形式|发布形式|媒介形式|图文.?视频|图文或视频|图文还是视频|primarycontenttype|primarynotetype/i);
   const creatorTypeChoice = has(/图文/) && has(/视频/);
@@ -1691,7 +1698,8 @@ function canonicalFieldForHeader(header, context = "") {
   if (/(小红书号|红书号|小红书id|red_?id|xhs_?id|redbook_?id|red_book_id|xiaohongshu_?id)/i.test(raw)) return "小红书号";
   if (!unsafeNicknameHeader && /(达人名|达人名称|达人昵称|博主名|博主名称|博主昵称|账号名|账号名称|昵称)/i.test(raw)) return "达人昵称";
   if (/^(博主类型|达人类型|内容类型)$/i.test(headerText.replace(/\s+/g, ""))) return "博主类型";
-  if (/(账号类型|达人标签|博主类目|博主标签|账号标签|账号类目|内容标签|内容类目|类目分类|账号分类)/i.test(raw)) return "账号类型";
+  if (/^(标签|达人标签|自定义标签|用户标签)$/i.test(headerText.replace(/\s+/g, ""))) return "自定义标签";
+  if (/(账号类型|博主类目|博主标签|账号标签|账号类目|内容标签|内容类目|类目分类|账号分类)/i.test(raw)) return "账号类型";
   if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw) && /(w|万|量级)/i.test(raw)) return "粉丝数w";
   if (!unsafeFansHeader && /(粉丝|fans|follower)/i.test(raw)) return "粉丝数";
   if (/(图文|图片|笔记)/i.test(raw) && /(报价|价格|裸价|报备|刊例|一口价)/i.test(raw)) return "图文报价";

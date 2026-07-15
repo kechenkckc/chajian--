@@ -9,8 +9,15 @@ const FavoriteDataTools = (() => {
     likesText: ["获赞与收藏", "赞藏数", "赞藏数（万）", "赞藏数(万)", "likesText"],
     picturePriceText: ["图文报价", "图文笔记一口价", "图文一口价", "picturePriceText"],
     videoPriceText: ["视频报价", "视频笔记一口价", "视频一口价", "videoPriceText"],
+    cooperationExposureMedian: ["合作曝光中位数", "曝光中位数（合作）", "合作曝光", "cooperationExposureMedian"],
+    cooperationReadMedian: ["合作阅读中位数", "阅读中位数（合作）", "合作阅读", "cooperationReadMedian"],
+    cooperationInteractionMedian: ["合作互动中位数", "互动中位数（合作）", "合作互动", "cooperationInteractionMedian"],
+    cooperationNoteCount: ["合作笔记数", "已合作笔记数", "cooperationNoteCount"],
+    cpmText: ["CPM", "合作CPM", "cpm", "cpmText"],
+    cpeText: ["CPE", "合作CPE", "cpe", "cpeText"],
     bio: ["个人简介", "简介", "博主人设", "bio"],
-    categoryTags: ["内容类目", "内容类型", "类目", "分类", "标签", "categoryTags"],
+    categoryTags: ["内容类目", "内容类型", "账号类型", "类目", "分类", "categoryTags"],
+    customTags: ["标签", "达人标签", "自定义标签", "用户标签", "tags", "tag", "customTags"],
     xhsUrl: ["主页链接", "小红书主页", "小红书链接", "xhsUrl", "profile_url"],
     pgyUrl: ["蒲公英链接", "蒲公英主页", "pgyUrl", "pgy_url"],
     status: ["达人库状态", "状态", "详情补采状态", "status"],
@@ -192,6 +199,15 @@ const FavoriteDataTools = (() => {
       || "";
   }
 
+  function splitTags(value, limit = 30) {
+    const tags = [];
+    for (const tag of cellText(value).split(/[\n、,，/|｜;；]+/).map((item) => item.trim()).filter(Boolean)) {
+      if (!tags.includes(tag)) tags.push(tag);
+      if (tags.length >= limit) break;
+    }
+    return tags;
+  }
+
   function objectToFavorite(row) {
     const values = normalizedRow(row);
     const pgyUrl = pick(values, "pgyUrl");
@@ -199,12 +215,14 @@ const FavoriteDataTools = (() => {
     const userId = cleanUserId(pick(values, "userId"), pgyUrl, xhsUrl);
     if (!userId) return null;
     const record = { userId, source: "spreadsheet_import", updatedAt: new Date().toISOString() };
-    for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
+    for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "cooperationExposureMedian", "cooperationReadMedian", "cooperationInteractionMedian", "cooperationNoteCount", "cpmText", "cpeText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
       const value = pick(values, field);
       if (value) record[field] = value;
     }
     const categoryText = pick(values, "categoryTags");
-    if (categoryText) record.categoryTags = categoryText.split(/[、,，/|｜;；]+/).map((item) => item.trim()).filter(Boolean).slice(0, 5);
+    if (categoryText) record.categoryTags = splitTags(categoryText);
+    const customTagText = pick(values, "customTags");
+    if (customTagText) record.customTags = splitTags(customTagText);
     if (!record.status) record.status = "表格导入";
     if (!record.createdAt) record.createdAt = new Date().toISOString();
     return record;
@@ -227,6 +245,12 @@ const FavoriteDataTools = (() => {
         continue;
       }
       const patch = Object.fromEntries(Object.entries(record).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+      if (record.categoryTags?.length) {
+        patch.categoryTags = Array.from(new Set([...(current.categoryTags || []), ...record.categoryTags]));
+      }
+      if (record.customTags?.length) {
+        patch.customTags = Array.from(new Set([...(current.customTags || []), ...record.customTags]));
+      }
       byId.set(record.userId, {
         ...current,
         ...patch,
@@ -251,7 +275,14 @@ const FavoriteDataTools = (() => {
       "获赞与收藏": item.likesText || "",
       "图文报价": item.picturePriceText || "",
       "视频报价": item.videoPriceText || "",
+      "合作曝光中位数": item.cooperationExposureMedian || "",
+      "合作阅读中位数": item.cooperationReadMedian || "",
+      "合作互动中位数": item.cooperationInteractionMedian || "",
+      "合作笔记数": item.cooperationNoteCount || "",
+      "CPM": item.cpmText || item.cpm || "",
+      "CPE": item.cpeText || item.cpe || "",
       "内容类目": (item.categoryTags || []).join("、"),
+      "标签": (item.customTags || []).join("、"),
       "个人简介": item.bio || "",
       "小红书主页": item.xhsUrl || "",
       "蒲公英主页": item.pgyUrl || "",

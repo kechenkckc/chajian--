@@ -1,4 +1,5 @@
 const STORAGE_KEY = "pgyPreFavorites";
+const TAG_LIBRARY_KEY = "pgyPreFavoriteTagLibrary";
 
 const favoriteCount = document.getElementById("favoriteCount");
 const favoriteList = document.getElementById("favoriteList");
@@ -16,6 +17,33 @@ const manageFeishuConfigsBtn = document.getElementById("manageFeishuConfigsBtn")
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
 const categoryFilters = document.getElementById("categoryFilters");
+const tagFilters = document.getElementById("tagFilters");
+const priceTypeFilter = document.getElementById("priceTypeFilter");
+const priceMinInput = document.getElementById("priceMinInput");
+const priceMaxInput = document.getElementById("priceMaxInput");
+const clearPriceFilterBtn = document.getElementById("clearPriceFilterBtn");
+const performanceSort = document.getElementById("performanceSort");
+const activeFilterBar = document.getElementById("activeFilterBar");
+const activeFilterChips = document.getElementById("activeFilterChips");
+const clearAllFiltersBtn = document.getElementById("clearAllFiltersBtn");
+const performanceFilterSummary = document.getElementById("performanceFilterSummary");
+const performancePresetButtons = Array.from(document.querySelectorAll("[data-performance-preset]"));
+const clearPerformanceFiltersBtn = document.getElementById("clearPerformanceFiltersBtn");
+const cooperationExposureMin = document.getElementById("cooperationExposureMin");
+const cooperationExposureMax = document.getElementById("cooperationExposureMax");
+const cooperationReadMin = document.getElementById("cooperationReadMin");
+const cooperationReadMax = document.getElementById("cooperationReadMax");
+const cooperationInteractionMin = document.getElementById("cooperationInteractionMin");
+const cooperationInteractionMax = document.getElementById("cooperationInteractionMax");
+const cpmMin = document.getElementById("cpmMin");
+const cpmMax = document.getElementById("cpmMax");
+const cpeMin = document.getElementById("cpeMin");
+const cpeMax = document.getElementById("cpeMax");
+const customTagInput = document.getElementById("customTagInput");
+const customTagSuggestions = document.getElementById("customTagSuggestions");
+const addTagBtn = document.getElementById("addTagBtn");
+const removeTagBtn = document.getElementById("removeTagBtn");
+const tagLibraryChips = document.getElementById("tagLibraryChips");
 const exportBtn = document.getElementById("exportBtn");
 const importFile = document.getElementById("importFile");
 const updateAllBtn = document.getElementById("updateAllBtn");
@@ -25,6 +53,15 @@ const dataProgress = document.getElementById("dataProgress");
 const dataProgressLabel = document.getElementById("dataProgressLabel");
 const dataProgressValue = document.getElementById("dataProgressValue");
 const dataProgressBar = document.getElementById("dataProgressBar");
+const tagPickerDialog = document.getElementById("tagPickerDialog");
+const tagPickerCreator = document.getElementById("tagPickerCreator");
+const tagPickerExistingTags = document.getElementById("tagPickerExistingTags");
+const tagPickerNewInput = document.getElementById("tagPickerNewInput");
+const tagPickerSelection = document.getElementById("tagPickerSelection");
+const tagPickerError = document.getElementById("tagPickerError");
+const closeTagPickerBtn = document.getElementById("closeTagPickerBtn");
+const cancelTagPickerBtn = document.getElementById("cancelTagPickerBtn");
+const saveTagPickerBtn = document.getElementById("saveTagPickerBtn");
 const DEFAULT_CATEGORIES = [
   "美妆",
   "护肤",
@@ -60,8 +97,12 @@ let selectedUserIds = new Set();
 let writing = false;
 let dataBusy = false;
 let activeCategory = "";
+let activeTag = "";
+let tagLibrary = [];
 let configuredTables = [];
 let activeTable = null;
+let tagPickerUserId = "";
+let tagPickerSelectedTags = new Set();
 
 function normalizeTableConfigs(configs) {
   return (Array.isArray(configs) ? configs : [])
@@ -279,12 +320,13 @@ function sanitizeBio(value) {
 }
 
 function normalizeCategoryTags(value, source = "") {
-  const rawTags = Array.isArray(value) ? value : [];
+  const rawTags = normalizeTagList(value);
   const hasLegacyPgyShape = rawTags.some((tag) => /[-—>；;]/.test(String(tag || "")));
-  if (source !== "pgy_profile" && !hasLegacyPgyShape) return [];
   const tags = [];
   for (const rawTag of rawTags) {
-    const parts = String(rawTag || "").split(/[;；]+/);
+    const parts = source === "pgy_profile" || hasLegacyPgyShape
+      ? String(rawTag || "").split(/[;；]+/)
+      : [rawTag];
     for (const part of parts) {
       const text = part.trim();
       if (!text) continue;
@@ -293,7 +335,19 @@ function normalizeCategoryTags(value, source = "") {
       if (!tags.includes(tag)) tags.push(tag);
     }
   }
-  return tags.slice(0, 5);
+  return tags.slice(0, 30);
+}
+
+function normalizeTagList(value, limit = 30) {
+  const source = Array.isArray(value) ? value : String(value || "").split(/[\n、,，/|｜;；]+/);
+  const tags = [];
+  for (const item of source) {
+    const tag = String(item || "").trim();
+    if (!tag || tags.includes(tag)) continue;
+    tags.push(tag);
+    if (tags.length >= limit) break;
+  }
+  return tags;
 }
 
 function normalizeFavorites(items) {
@@ -312,9 +366,12 @@ function normalizeFavorites(items) {
       cooperationReadMedian: String(item?.cooperationReadMedian ?? "").trim(),
       cooperationInteractionMedian: String(item?.cooperationInteractionMedian ?? "").trim(),
       cooperationNoteCount: String(item?.cooperationNoteCount ?? "").trim(),
+      cpmText: String(item?.cpmText ?? item?.cpm ?? item?.CPM ?? "").trim(),
+      cpeText: String(item?.cpeText ?? item?.cpe ?? item?.CPE ?? "").trim(),
       quoteStatus: String(item?.quoteStatus || "").trim(),
       bio: sanitizeBio(item?.bio),
       categoryTags: normalizeCategoryTags(item?.categoryTags, item?.categorySource),
+      customTags: normalizeTagList(item?.customTags),
       categorySource: String(item?.categorySource || "").trim(),
       xhsUrl: String(item?.xhsUrl || "").trim(),
       pgyUrl: String(item?.pgyUrl || "").trim(),
@@ -345,29 +402,139 @@ function favoriteSearchText(item) {
     item.bio,
     item.status,
     ...(item.feishuWriteHistory || []).map((entry) => entry.label),
-    ...(item.categoryTags || [])
+    ...(item.categoryTags || []),
+    ...(item.customTags || [])
   ].join(" ").toLowerCase();
 }
 
-function filteredFavorites() {
+function parsePriceValue(value) {
+  const text = String(value || "").trim().toLowerCase().replace(/[￥¥元\s,，]/g, "");
+  if (!text) return null;
+  const match = text.match(/(\d+(?:\.\d+)?)/);
+  if (!match) return null;
+  let amount = Number(match[1]);
+  if (!Number.isFinite(amount)) return null;
+  if (/万|w/.test(text)) amount *= 10000;
+  else if (/千|k/.test(text)) amount *= 1000;
+  return amount;
+}
+
+function cooperationMetricValues(item) {
+  const exposure = parsePriceValue(item.cooperationExposureMedian);
+  const read = parsePriceValue(item.cooperationReadMedian);
+  const interaction = parsePriceValue(item.cooperationInteractionMedian);
+  const quote = parsePriceValue(item.picturePriceText) ?? parsePriceValue(item.videoPriceText);
+  const directCpm = parsePriceValue(item.cpmText);
+  const directCpe = parsePriceValue(item.cpeText);
+  return {
+    exposure,
+    read,
+    interaction,
+    cpm: directCpm ?? (quote !== null && exposure ? (quote / exposure) * 1000 : null),
+    cpe: directCpe ?? (quote !== null && interaction ? quote / interaction : null)
+  };
+}
+
+function sortableMetricValues(item) {
+  return {
+    followers: parsePriceValue(item.followersText),
+    picturePrice: parsePriceValue(item.picturePriceText),
+    videoPrice: parsePriceValue(item.videoPriceText),
+    ...cooperationMetricValues(item)
+  };
+}
+
+const performanceRangeFields = [
+  ["exposure", cooperationExposureMin, cooperationExposureMax],
+  ["read", cooperationReadMin, cooperationReadMax],
+  ["interaction", cooperationInteractionMin, cooperationInteractionMax],
+  ["cpm", cpmMin, cpmMax],
+  ["cpe", cpeMin, cpeMax]
+];
+
+function matchesPerformanceFilters(item) {
+  const metrics = cooperationMetricValues(item);
+  return performanceRangeFields.every(([field, minimumInput, maximumInput]) => {
+    const minimum = parsePriceValue(minimumInput.value);
+    const maximum = parsePriceValue(maximumInput.value);
+    if (minimum === null && maximum === null) return true;
+    const value = metrics[field];
+    return value !== null
+      && (minimum === null || value >= minimum)
+      && (maximum === null || value <= maximum);
+  });
+}
+
+function sortByPerformance(items) {
+  const [field, direction] = String(performanceSort.value || "").split(":");
+  if (!field || !direction) return items;
+  const multiplier = direction === "asc" ? 1 : -1;
+  return items.sort((left, right) => {
+    const leftValue = sortableMetricValues(left)[field];
+    const rightValue = sortableMetricValues(right)[field];
+    if (leftValue === null && rightValue === null) return 0;
+    if (leftValue === null) return 1;
+    if (rightValue === null) return -1;
+    return (leftValue - rightValue) * multiplier;
+  });
+}
+
+function compactMetricText(value) {
+  if (value === null || !Number.isFinite(value)) return "--";
+  if (Math.abs(value) >= 10000) return `${Math.round((value / 10000) * 10) / 10}万`;
+  return Math.round(value).toLocaleString("zh-CN");
+}
+
+function costMetricText(value) {
+  if (value === null || !Number.isFinite(value)) return "--";
+  return value >= 100 ? Math.round(value).toLocaleString("zh-CN") : value.toFixed(value < 10 ? 2 : 1);
+}
+
+function matchesPriceFilter(item) {
+  const minimum = priceMinInput.value === "" ? null : Number(priceMinInput.value);
+  const maximum = priceMaxInput.value === "" ? null : Number(priceMaxInput.value);
+  if (minimum === null && maximum === null) return true;
+  const values = priceTypeFilter.value === "picture"
+    ? [parsePriceValue(item.picturePriceText)]
+    : priceTypeFilter.value === "video"
+      ? [parsePriceValue(item.videoPriceText)]
+      : [parsePriceValue(item.picturePriceText), parsePriceValue(item.videoPriceText)];
+  return values.some((price) => price !== null
+    && (minimum === null || price >= minimum)
+    && (maximum === null || price <= maximum));
+}
+
+function matchesFavoriteFilters(item, { ignoreCategory = false, ignoreTag = false } = {}) {
   const keyword = String(searchInput.value || "").trim().toLowerCase();
   const status = statusFilter.value;
-  return favorites.filter((item) => {
-    const writeHistory = item.feishuWriteHistory || [];
-    if (status === "never" && writeHistory.length) return false;
-    if (status === "any" && !writeHistory.length) return false;
-    if (status.startsWith("table:") && !writeHistory.some((entry) => entry.key === status.slice(6))) return false;
+  const writeHistory = item.feishuWriteHistory || [];
+  if (status === "never" && writeHistory.length) return false;
+  if (status === "any" && !writeHistory.length) return false;
+  if (status.startsWith("table:") && !writeHistory.some((entry) => entry.key === status.slice(6))) return false;
+  if (!ignoreCategory) {
     if (activeCategory === "未分类" && (item.categoryTags || []).length) return false;
     if (activeCategory && activeCategory !== "未分类" && !(item.categoryTags || []).includes(activeCategory)) return false;
-    if (keyword && !favoriteSearchText(item).includes(keyword)) return false;
-    return true;
-  });
+  }
+  if (!ignoreTag) {
+    if (activeTag === "未标签" && (item.customTags || []).length) return false;
+    if (activeTag && activeTag !== "未标签" && !(item.customTags || []).includes(activeTag)) return false;
+  }
+  if (!matchesPriceFilter(item)) return false;
+  if (!matchesPerformanceFilters(item)) return false;
+  if (keyword && !favoriteSearchText(item).includes(keyword)) return false;
+  return true;
+}
+
+function filteredFavorites() {
+  const items = favorites.filter((item) => matchesFavoriteFilters(item));
+  return sortByPerformance(items);
 }
 
 function allCategoryTags() {
   const counts = new Map();
   for (const category of DEFAULT_CATEGORIES) counts.set(category, 0);
-  for (const item of favorites) {
+  const matchingFavorites = favorites.filter((item) => matchesFavoriteFilters(item, { ignoreCategory: true }));
+  for (const item of matchingFavorites) {
     const tags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
     for (const tag of tags) {
       counts.set(tag, (counts.get(tag) || 0) + 1);
@@ -386,12 +553,127 @@ function allCategoryTags() {
 function renderCategoryFilters() {
   const tags = allCategoryTags();
   const allActive = activeCategory === "";
+  const visibleTags = tags.filter(([tag, count]) => count > 0 || activeCategory === tag);
+  const hiddenTags = tags.filter(([tag, count]) => count === 0 && activeCategory !== tag);
+  const tagButton = ([tag, count]) => `
+    <button type="button" class="category-chip ${activeCategory === tag ? "is-active" : ""}" data-category="${escapeHtml(tag)}"><span>${escapeHtml(tag)}</span>${count ? `<em>${count}</em>` : ""}</button>
+  `;
   categoryFilters.innerHTML = [
     `<button type="button" class="category-chip ${allActive ? "is-active" : ""}" data-category="">全部</button>`,
-    ...tags.map(([tag, count]) => `
-      <button type="button" class="category-chip ${activeCategory === tag ? "is-active" : ""}" data-category="${escapeHtml(tag)}">${escapeHtml(tag)}${count ? ` ${count}` : ""}</button>
-    `)
+    ...visibleTags.map(tagButton),
+    hiddenTags.length ? `<details class="facet-more"><summary>其余类目 ${hiddenTags.length}</summary><div>${hiddenTags.map(tagButton).join("")}</div></details>` : ""
   ].join("");
+}
+
+function allCustomTags() {
+  const counts = new Map();
+  for (const item of favorites) {
+    const tags = (item.customTags || []).length ? item.customTags : ["未标签"];
+    for (const tag of tags) counts.set(tag, 0);
+  }
+  if (activeTag && !counts.has(activeTag)) counts.set(activeTag, 0);
+  const matchingFavorites = favorites.filter((item) => matchesFavoriteFilters(item, { ignoreTag: true }));
+  for (const item of matchingFavorites) {
+    const tags = (item.customTags || []).length ? item.customTags : ["未标签"];
+    for (const tag of tags) counts.set(tag, (counts.get(tag) || 0) + 1);
+  }
+  return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"));
+}
+
+function renderTagFilters() {
+  const tags = allCustomTags();
+  const visibleTags = tags.filter(([tag, count]) => count > 0 || activeTag === tag);
+  const hiddenTags = tags.filter(([tag, count]) => count === 0 && activeTag !== tag);
+  const tagButton = ([tag, count]) => `<button type="button" class="category-chip tag-chip ${activeTag === tag ? "is-active" : ""}" data-tag="${escapeHtml(tag)}"><span>${escapeHtml(tag)}</span>${count ? `<em>${count}</em>` : ""}</button>`;
+  tagFilters.innerHTML = [
+    `<button type="button" class="category-chip ${activeTag === "" ? "is-active" : ""}" data-tag="">全部</button>`,
+    ...visibleTags.map(tagButton),
+    hiddenTags.length ? `<details class="facet-more"><summary>其余标签 ${hiddenTags.length}</summary><div>${hiddenTags.map(tagButton).join("")}</div></details>` : ""
+  ].join("");
+  customTagSuggestions.innerHTML = tagLibrary
+    .map((tag) => `<option value="${escapeHtml(tag)}"></option>`)
+    .join("");
+  tagLibraryChips.innerHTML = tagLibrary.length
+    ? `<span>已有标签，点击添加：</span>${tagLibrary.map((tag) => `<button type="button" data-library-tag="${escapeHtml(tag)}">+ ${escapeHtml(tag)}</button>`).join("")}`
+    : `<span>新增标签后会保存在这里，可继续分配给其他博主。</span>`;
+}
+
+function performanceFilterCount() {
+  return performanceRangeFields.reduce((count, [, minimumInput, maximumInput]) => count + Number(Boolean(minimumInput.value || maximumInput.value)), 0);
+}
+
+function renderActiveFilters() {
+  const chips = [];
+  const keyword = String(searchInput.value || "").trim();
+  if (keyword) chips.push({ key: "search", label: `搜索：${keyword}` });
+  if (statusFilter.value) chips.push({ key: "status", label: statusFilter.selectedOptions[0]?.textContent || "飞书状态" });
+  const priceParts = [];
+  if (priceTypeFilter.value !== "any") priceParts.push(priceTypeFilter.selectedOptions[0]?.textContent || "报价类型");
+  if (priceMinInput.value) priceParts.push(`≥ ${priceMinInput.value}`);
+  if (priceMaxInput.value) priceParts.push(`≤ ${priceMaxInput.value}`);
+  if (priceParts.length) chips.push({ key: "price", label: `报价 ${priceParts.join(" · ")}` });
+  if (performanceSort.value) chips.push({ key: "sort", label: `排序：${performanceSort.selectedOptions[0]?.textContent || "已设置"}` });
+  const performanceLabels = {
+    exposure: "合作曝光",
+    read: "合作阅读",
+    interaction: "合作互动",
+    cpm: "CPM",
+    cpe: "CPE"
+  };
+  performanceRangeFields.forEach(([field, minimumInput, maximumInput]) => {
+    const parts = [];
+    if (minimumInput.value) parts.push(`≥ ${minimumInput.value}`);
+    if (maximumInput.value) parts.push(`≤ ${maximumInput.value}`);
+    if (parts.length) chips.push({ key: `performance:${field}`, label: `${performanceLabels[field]} ${parts.join(" · ")}` });
+  });
+  if (activeCategory) chips.push({ key: "category", label: `类目：${activeCategory}` });
+  if (activeTag) chips.push({ key: "tag", label: `标签：${activeTag}` });
+  activeFilterBar.hidden = chips.length === 0;
+  activeFilterChips.innerHTML = chips.map((chip) => `<button type="button" data-clear-filter="${escapeHtml(chip.key)}">${escapeHtml(chip.label)}<b>×</b></button>`).join("");
+  const performanceCount = performanceFilterCount();
+  performanceFilterSummary.textContent = `曝光、阅读、互动、CPM、CPE · 已启用 ${performanceCount} 项`;
+  const activePresets = new Set();
+  if (cooperationReadMin.value === "1万") activePresets.add("high-read");
+  if (cooperationInteractionMin.value === "500") activePresets.add("high-interaction");
+  if (cpmMax.value === "80") activePresets.add("low-cpm");
+  if (cpeMax.value === "3") activePresets.add("low-cpe");
+  performancePresetButtons.forEach((button) => button.classList.toggle("is-active", activePresets.has(button.dataset.performancePreset)));
+}
+
+function clearFilter(key) {
+  if (key === "search") searchInput.value = "";
+  else if (key === "status") statusFilter.value = "";
+  else if (key === "price") {
+    priceTypeFilter.value = "any";
+    priceMinInput.value = "";
+    priceMaxInput.value = "";
+  } else if (key === "sort") performanceSort.value = "";
+  else if (key === "category") activeCategory = "";
+  else if (key === "tag") activeTag = "";
+  else if (key.startsWith("performance:")) {
+    const field = key.slice("performance:".length);
+    const target = performanceRangeFields.find(([name]) => name === field);
+    if (target) {
+      target[1].value = "";
+      target[2].value = "";
+    }
+  }
+}
+
+function clearAllFilters() {
+  searchInput.value = "";
+  statusFilter.value = "";
+  priceTypeFilter.value = "any";
+  priceMinInput.value = "";
+  priceMaxInput.value = "";
+  performanceSort.value = "";
+  performanceRangeFields.forEach(([, minimumInput, maximumInput]) => {
+    minimumInput.value = "";
+    maximumInput.value = "";
+  });
+  activeCategory = "";
+  activeTag = "";
+  renderFavorites();
 }
 
 function updateSelectionState() {
@@ -402,6 +684,12 @@ function updateSelectionState() {
   const selected = selectedUserIds.size;
   selectedCount.textContent = `已选 ${selected} 位`;
   writeFeishuBtn.disabled = writing || selected === 0 || !activeTable;
+  addTagBtn.disabled = writing || dataBusy || selected === 0;
+  removeTagBtn.disabled = writing || dataBusy || selected === 0;
+  customTagInput.disabled = writing || dataBusy;
+  tagLibraryChips.querySelectorAll("button").forEach((button) => {
+    button.disabled = writing || dataBusy || selected === 0;
+  });
   clearBtn.disabled = writing || favorites.length === 0;
   selectAll.disabled = writing || visible.length === 0;
   selectAll.checked = visible.length > 0 && visibleSelected === visible.length;
@@ -515,14 +803,22 @@ async function updateAllFavorites() {
 }
 
 async function loadFavorites() {
-  const stored = await chrome.storage.local.get({ [STORAGE_KEY]: [] });
+  const stored = await chrome.storage.local.get({ [STORAGE_KEY]: [], [TAG_LIBRARY_KEY]: [] });
   favorites = normalizeFavorites(stored[STORAGE_KEY]);
+  tagLibrary = normalizeTagList([
+    ...normalizeTagList(stored[TAG_LIBRARY_KEY]),
+    ...favorites.flatMap((item) => item.customTags || [])
+  ], 200);
   renderFavorites();
 }
 
 async function saveFavorites(nextFavorites) {
   favorites = normalizeFavorites(nextFavorites);
-  await chrome.storage.local.set({ [STORAGE_KEY]: favorites });
+  tagLibrary = normalizeTagList([
+    ...tagLibrary,
+    ...favorites.flatMap((item) => item.customTags || [])
+  ], 200);
+  await chrome.storage.local.set({ [STORAGE_KEY]: favorites, [TAG_LIBRARY_KEY]: tagLibrary });
   renderFavorites();
 }
 
@@ -536,7 +832,9 @@ function renderEmpty() {
 
 function renderFavorites() {
   renderFeishuStatusOptions();
+  renderActiveFilters();
   renderCategoryFilters();
+  renderTagFilters();
   const visibleFavorites = filteredFavorites();
   favoriteCount.textContent = String(favorites.length);
   updateSelectionState();
@@ -553,7 +851,9 @@ function renderFavorites() {
     const initial = avatarInitial(name);
     const pgyUrl = item.pgyUrl || `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${encodeURIComponent(item.userId)}`;
     const xhsUrl = item.xhsUrl || `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(item.userId)}`;
-    const tags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
+    const categoryTags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
+    const customTags = item.customTags || [];
+    const performance = cooperationMetricValues(item);
     const quoteStatus = item.quoteStatus || (!item.picturePriceText && !item.videoPriceText ? "报价待补充" : "");
     const writeHistory = item.feishuWriteHistory || [];
     const writeHistoryHtml = writeHistory.length ? `
@@ -572,22 +872,39 @@ function renderFavorites() {
         <div class="favorite-info">
           <div class="headline">
             <a class="profile-link nickname-link" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener" title="打开 ${escapeHtml(name)} 的蒲公英主页">${escapeHtml(name)}</a>
-            <div class="tag-list">${tags.map((tag) => `<span class="tag">${escapeHtml(tag)}</span>`).join("")}</div>
+            <div class="tag-list">${categoryTags.map((tag) => `<span class="tag category-tag">${escapeHtml(tag)}</span>`).join("")}</div>
+          </div>
+          <div class="custom-tag-list">
+            <span class="custom-tag-label">标签</span>
+            ${customTags.length
+              ? customTags.map((tag) => `<span class="tag custom-tag">${escapeHtml(tag)}</span>`).join("")
+              : `<span class="no-custom-tag">未设置</span>`}
+            <button type="button" class="tag-add-button" data-action="add-tag" title="添加标签" aria-label="为 ${escapeHtml(name)} 添加标签">+</button>
           </div>
           <div class="profile-data">
             <a class="profile-link red-id-link" href="${escapeHtml(xhsUrl)}" target="_blank" rel="noopener" title="打开 ${escapeHtml(name)} 的小红书主页">红书号：${escapeHtml(item.redId || item.userId)}</a>
             ${item.location ? `<span>${escapeHtml(item.location)}</span>` : ""}
           </div>
-          <div class="key-metrics">
-            <div><span>粉丝</span><strong>${escapeHtml(item.followersText || "-")}</strong></div>
-            <div><span>图文报价</span><strong>${escapeHtml(item.picturePriceText || "待补充")}</strong></div>
-            <div><span>视频报价</span><strong>${escapeHtml(item.videoPriceText || "待补充")}</strong></div>
+          <div class="metrics-row">
+            <div class="key-metrics">
+              <div><span>粉丝</span><strong>${escapeHtml(item.followersText || "-")}</strong></div>
+              <div><span>图文报价</span><strong>${escapeHtml(item.picturePriceText || "待补充")}</strong></div>
+              <div><span>视频报价</span><strong>${escapeHtml(item.videoPriceText || "待补充")}</strong></div>
+            </div>
+            <div class="cooperation-metrics" title="CPM / CPE 优先使用已有数据；缺失时按图文报价（无图文则视频报价）在本地计算，不增加抓取时间。">
+              <div><span>合作曝光</span><strong>${compactMetricText(performance.exposure)}</strong></div>
+              <div><span>合作阅读</span><strong>${compactMetricText(performance.read)}</strong></div>
+              <div><span>合作互动</span><strong>${compactMetricText(performance.interaction)}</strong></div>
+              <div><span>CPM</span><strong>${costMetricText(performance.cpm)}</strong></div>
+              <div><span>CPE</span><strong>${costMetricText(performance.cpe)}</strong></div>
+            </div>
           </div>
           ${item.bio ? `<div class="bio">${escapeHtml(item.bio)}</div>` : ""}
           ${writeHistoryHtml}
           <div class="meta">${escapeHtml(item.status || "预收藏")} · 收藏 ${escapeHtml(formatTime(item.createdAt))}${quoteStatus ? ` · ${escapeHtml(quoteStatus)}` : ""}</div>
         </div>
         <div class="card-actions">
+          <button type="button" data-action="edit-tags">编辑标签</button>
           <a class="button" href="${escapeHtml(xhsUrl)}" target="_blank" rel="noopener">小红书主页</a>
           <a class="button primary" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener">蒲公英详情</a>
           <button type="button" class="danger" data-action="remove">移除</button>
@@ -618,10 +935,107 @@ function selectedFavorites() {
   return favorites.filter((item) => selectedUserIds.has(item.userId));
 }
 
+async function applyTagsToSelected(mode, providedTags = null) {
+  const tags = normalizeTagList(providedTags || customTagInput.value);
+  if (!tags.length) throw new Error("请输入至少一个标签。");
+  if (!selectedUserIds.size) throw new Error("请先勾选要分配标签的达人。");
+  const selected = new Set(selectedUserIds);
+  if (mode !== "remove") tagLibrary = normalizeTagList([...tagLibrary, ...tags], 200);
+  const next = favorites.map((item) => {
+    if (!selected.has(item.userId)) return item;
+    const current = item.customTags || [];
+    return {
+      ...item,
+      customTags: mode === "remove"
+        ? current.filter((tag) => !tags.includes(tag))
+        : Array.from(new Set([...current, ...tags])),
+      updatedAt: new Date().toISOString()
+    };
+  });
+  await saveFavorites(next);
+  customTagInput.value = "";
+  setStatus(`已为 ${selected.size} 位达人${mode === "remove" ? "移除" : "添加"}标签：${tags.join("、")}。`);
+}
+
+async function editFavoriteTags(userId) {
+  const item = favorites.find((favorite) => favorite.userId === userId);
+  if (!item) return;
+  const value = window.prompt("编辑达人标签（多个标签可用逗号或顿号分隔，清空表示移除全部标签）", (item.customTags || []).join("、"));
+  if (value === null) return;
+  const customTags = normalizeTagList(value);
+  tagLibrary = normalizeTagList([...tagLibrary, ...customTags], 200);
+  await saveFavorites(favorites.map((favorite) => favorite.userId === userId
+    ? { ...favorite, customTags, updatedAt: new Date().toISOString() }
+    : favorite));
+  setStatus(`已更新「${item.name || item.userId}」的标签。`);
+}
+
+function tagPickerItem() {
+  return favorites.find((favorite) => favorite.userId === tagPickerUserId) || null;
+}
+
+function tagPickerPendingTags() {
+  const assignedTags = new Set(tagPickerItem()?.customTags || []);
+  return normalizeTagList([...tagPickerSelectedTags, ...normalizeTagList(tagPickerNewInput.value)], 30)
+    .filter((tag) => !assignedTags.has(tag));
+}
+
+function renderTagPicker() {
+  const item = tagPickerItem();
+  if (!item) return;
+  const assignedTags = new Set(item.customTags || []);
+  const availableTags = normalizeTagList([...tagLibrary, ...assignedTags], 200);
+  tagPickerExistingTags.innerHTML = availableTags.length
+    ? availableTags.map((tag) => {
+        const assigned = assignedTags.has(tag);
+        const selected = tagPickerSelectedTags.has(tag);
+        return `<button type="button" class="${assigned ? "is-assigned" : selected ? "is-selected" : ""}" data-picker-tag="${escapeHtml(tag)}" ${assigned ? "disabled" : ""}><span>${escapeHtml(tag)}</span><b>${assigned ? "已添加" : selected ? "✓" : "+"}</b></button>`;
+      }).join("")
+    : `<p class="tag-picker-empty">标签库还是空的，可以直接在下方创建第一个标签。</p>`;
+  const pendingTags = tagPickerPendingTags();
+  tagPickerSelection.textContent = pendingTags.length ? `本次将添加：${pendingTags.join("、")}` : "暂未选择标签";
+  saveTagPickerBtn.disabled = pendingTags.length === 0;
+}
+
+function openTagPicker(userId) {
+  const item = favorites.find((favorite) => favorite.userId === userId);
+  if (!item) return;
+  tagPickerUserId = userId;
+  tagPickerSelectedTags = new Set();
+  tagPickerNewInput.value = "";
+  tagPickerCreator.textContent = `正在为「${item.name || item.userId}」添加标签。`;
+  tagPickerError.hidden = true;
+  tagPickerError.textContent = "";
+  renderTagPicker();
+  tagPickerDialog.showModal();
+}
+
+function closeTagPicker() {
+  if (tagPickerDialog.open) tagPickerDialog.close();
+  tagPickerUserId = "";
+  tagPickerSelectedTags = new Set();
+}
+
+async function saveTagPicker() {
+  const item = tagPickerItem();
+  if (!item) return;
+  const userId = item.userId;
+  const addedTags = tagPickerPendingTags();
+  if (!addedTags.length) throw new Error("请输入至少一个标签。");
+  const customTags = Array.from(new Set([...(item.customTags || []), ...addedTags]));
+  tagLibrary = normalizeTagList([...tagLibrary, ...addedTags], 200);
+  await saveFavorites(favorites.map((favorite) => favorite.userId === userId
+    ? { ...favorite, customTags, updatedAt: new Date().toISOString() }
+    : favorite));
+  closeTagPicker();
+  setStatus(`已为「${item.name || item.userId}」添加标签：${addedTags.join("、")}。`);
+}
+
 function favoriteToFeishuRow(item) {
   const pgyUrl = item.pgyUrl || `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${encodeURIComponent(item.userId)}`;
   const xhsUrl = item.xhsUrl || `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(item.userId)}`;
   const collectedAt = item.createdAt || new Date().toISOString();
+  const performance = cooperationMetricValues(item);
   return {
     "达人ID": `pgy-api:${item.userId}`,
     "达人昵称": item.name || "",
@@ -633,11 +1047,17 @@ function favoriteToFeishuRow(item) {
     "获赞与收藏": item.likesText || "",
     "图文报价": item.picturePriceText || "",
     "视频报价": item.videoPriceText || "",
+    "CPM": performance.cpm ?? "",
+    "CPE": performance.cpe ?? "",
+    "标签": (item.customTags || []).join("、"),
+    "达人标签": (item.customTags || []).join("、"),
+    "自定义标签": (item.customTags || []).join("、"),
     "曝光中位数（合作）": item.cooperationExposureMedian || "",
     "阅读中位数（合作）": item.cooperationReadMedian || "",
     "互动中位数（合作）": item.cooperationInteractionMedian || "",
     "已合作笔记数": item.cooperationNoteCount || "",
     "账号类型": (item.categoryTags || []).join("、"),
+    "内容类目": (item.categoryTags || []).join("、"),
     "IP城市": item.location || "",
     "数据来源": "xhs_profile_prefavorite",
     "采集时间": formatTime(collectedAt),
@@ -717,12 +1137,22 @@ async function syncSelectedToFeishu() {
 }
 
 favoriteList.addEventListener("click", (event) => {
-  const button = event.target.closest('[data-action="remove"]');
+  const button = event.target.closest("[data-action]");
   if (!button) return;
   const card = button.closest(".favorite-card");
   const userId = card?.dataset?.userId || "";
   if (!userId) return;
-  removeFavorite(userId).catch((error) => setStatus(error.message, true));
+  if (button.dataset.action === "edit-tags") {
+    editFavoriteTags(userId).catch((error) => setStatus(error.message, true));
+    return;
+  }
+  if (button.dataset.action === "add-tag") {
+    openTagPicker(userId);
+    return;
+  }
+  if (button.dataset.action === "remove") {
+    removeFavorite(userId).catch((error) => setStatus(error.message, true));
+  }
 });
 
 favoriteList.addEventListener("change", (event) => {
@@ -733,6 +1163,44 @@ favoriteList.addEventListener("change", (event) => {
   if (checkbox.checked) selectedUserIds.add(userId);
   else selectedUserIds.delete(userId);
   updateSelectionState();
+});
+
+tagPickerExistingTags.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-picker-tag]");
+  if (!button || button.disabled) return;
+  const tag = button.dataset.pickerTag || "";
+  if (!tag) return;
+  if (tagPickerSelectedTags.has(tag)) tagPickerSelectedTags.delete(tag);
+  else tagPickerSelectedTags.add(tag);
+  renderTagPicker();
+});
+
+tagPickerNewInput.addEventListener("input", () => {
+  tagPickerError.hidden = true;
+  renderTagPicker();
+});
+
+tagPickerNewInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  saveTagPicker().catch((error) => {
+    tagPickerError.textContent = error.message;
+    tagPickerError.hidden = false;
+  });
+});
+
+closeTagPickerBtn.addEventListener("click", closeTagPicker);
+cancelTagPickerBtn.addEventListener("click", closeTagPicker);
+saveTagPickerBtn.addEventListener("click", () => saveTagPicker().catch((error) => {
+  tagPickerError.textContent = error.message;
+  tagPickerError.hidden = false;
+}));
+tagPickerDialog.addEventListener("click", (event) => {
+  if (event.target === tagPickerDialog) closeTagPicker();
+});
+tagPickerDialog.addEventListener("close", () => {
+  tagPickerUserId = "";
+  tagPickerSelectedTags = new Set();
 });
 
 selectAll.addEventListener("change", () => {
@@ -748,12 +1216,71 @@ selectAll.addEventListener("change", () => {
 
 searchInput.addEventListener("input", renderFavorites);
 statusFilter.addEventListener("change", renderFavorites);
+priceTypeFilter.addEventListener("change", renderFavorites);
+priceMinInput.addEventListener("input", renderFavorites);
+priceMaxInput.addEventListener("input", renderFavorites);
+clearPriceFilterBtn.addEventListener("click", () => {
+  priceTypeFilter.value = "any";
+  priceMinInput.value = "";
+  priceMaxInput.value = "";
+  renderFavorites();
+});
+performanceSort.addEventListener("change", renderFavorites);
+performanceRangeFields.forEach(([, minimumInput, maximumInput]) => {
+  minimumInput.addEventListener("input", renderFavorites);
+  maximumInput.addEventListener("input", renderFavorites);
+});
+clearPerformanceFiltersBtn.addEventListener("click", () => {
+  performanceRangeFields.forEach(([, minimumInput, maximumInput]) => {
+    minimumInput.value = "";
+    maximumInput.value = "";
+  });
+  renderFavorites();
+});
+performancePresetButtons.forEach((button) => button.addEventListener("click", () => {
+  const preset = button.dataset.performancePreset;
+  if (preset === "high-read") cooperationReadMin.value = "1万";
+  else if (preset === "high-interaction") cooperationInteractionMin.value = "500";
+  else if (preset === "low-cpm") cpmMax.value = "80";
+  else if (preset === "low-cpe") cpeMax.value = "3";
+  renderFavorites();
+}));
+activeFilterBar.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-clear-filter]");
+  if (!button) return;
+  clearFilter(button.dataset.clearFilter || "");
+  renderFavorites();
+});
+clearAllFiltersBtn.addEventListener("click", clearAllFilters);
 
 categoryFilters.addEventListener("click", (event) => {
   const button = event.target.closest("[data-category]");
   if (!button) return;
   activeCategory = button.dataset.category || "";
   renderFavorites();
+});
+
+tagFilters.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-tag]");
+  if (!button) return;
+  activeTag = button.dataset.tag || "";
+  renderFavorites();
+});
+
+tagLibraryChips.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-library-tag]");
+  if (!button) return;
+  const tag = button.dataset.libraryTag || "";
+  customTagInput.value = tag;
+  applyTagsToSelected("add", [tag]).catch((error) => setStatus(error.message, true));
+});
+
+addTagBtn.addEventListener("click", () => applyTagsToSelected("add").catch((error) => setStatus(error.message, true)));
+removeTagBtn.addEventListener("click", () => applyTagsToSelected("remove").catch((error) => setStatus(error.message, true)));
+customTagInput.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  applyTagsToSelected("add").catch((error) => setStatus(error.message, true));
 });
 
 writeFeishuBtn.addEventListener("click", () => syncSelectedToFeishu().catch((error) => {
@@ -776,6 +1303,10 @@ chrome.storage.onChanged.addListener((changes, areaName) => {
   if (areaName !== "local") return;
   if (changes[STORAGE_KEY]) {
     favorites = normalizeFavorites(changes[STORAGE_KEY].newValue);
+    renderFavorites();
+  }
+  if (changes[TAG_LIBRARY_KEY]) {
+    tagLibrary = normalizeTagList(changes[TAG_LIBRARY_KEY].newValue, 200);
     renderFavorites();
   }
   if (changes.feishuTableConfigs) {

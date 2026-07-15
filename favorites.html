@@ -29,53 +29,67 @@
         <p id="status">从小红书或蒲公英达人主页点击“预收藏”后，会显示在这里。</p>
       </section>
 
-      <section class="data-panel" aria-labelledby="dataPanelTitle">
-        <div class="data-panel-copy">
-          <p class="eyebrow">DATA DESK</p>
-          <h2 id="dataPanelTitle">达人库数据工具</h2>
-          <p>导入会按达人 ID 合并，保留已有飞书写回记录；全量更新会重新获取粉丝量、赞藏与最新报价。</p>
-        </div>
-        <div class="data-actions">
-          <button id="exportBtn" type="button">导出 Excel</button>
-          <label class="file-button" for="importFile">导入表格</label>
-          <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
-          <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
-        </div>
-        <div class="online-import">
-          <label for="onlineTableUrl">在线表格地址</label>
-          <div>
-            <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
-            <button id="importOnlineBtn" type="button">读取并导入</button>
+      <details class="data-panel" aria-labelledby="dataPanelTitle" open>
+        <summary class="data-panel-summary">
+          <div class="data-panel-copy">
+            <p class="eyebrow">DATA SYNC</p>
+            <h2 id="dataPanelTitle">达人数据同步</h2>
+            <p>导入、更新、导出及飞书写入配置集中管理。</p>
+          </div>
+          <span class="data-panel-toggle"><b>同步工具</b><i aria-hidden="true"></i></span>
+        </summary>
+        <div class="data-panel-body">
+          <div class="data-actions">
+            <button id="exportBtn" type="button">导出 Excel</button>
+            <label class="file-button" for="importFile">导入表格</label>
+            <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+            <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
+          </div>
+          <div class="online-import">
+            <label for="onlineTableUrl">在线表格地址</label>
+            <div>
+              <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
+              <button id="importOnlineBtn" type="button">读取并导入</button>
+            </div>
+          </div>
+          <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
+            <div class="feishu-config-copy">
+              <span class="config-kicker">FEISHU TARGET</span>
+              <strong id="feishuConfigTitle">飞书写入配置</strong>
+              <p>选择达人库写入的目标表格，选择后立即生效并自动记住。</p>
+            </div>
+            <div class="feishu-config-control">
+              <label for="favoriteConfiguredTable">
+                <span>配置选择</span>
+                <select id="favoriteConfiguredTable">
+                  <option value="">暂无已配置表格</option>
+                </select>
+              </label>
+              <p id="activeWriteTarget" class="active-write-target is-empty">当前生效：暂无可写入表格</p>
+            </div>
+            <div class="feishu-config-actions">
+              <button id="refreshFeishuConfigsBtn" type="button">刷新配置</button>
+              <button id="manageFeishuConfigsBtn" type="button">管理配置</button>
+            </div>
+          </div>
+          <div id="dataProgress" class="data-progress" hidden>
+            <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
+            <progress id="dataProgressBar" max="100" value="0"></progress>
           </div>
         </div>
-        <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
-          <div class="feishu-config-copy">
-            <span class="config-kicker">FEISHU TARGET</span>
-            <strong id="feishuConfigTitle">飞书写入配置</strong>
-            <p>选择达人库写入的目标表格，选择后立即生效并自动记住。</p>
-          </div>
-          <div class="feishu-config-control">
-            <label for="favoriteConfiguredTable">
-              <span>配置选择</span>
-              <select id="favoriteConfiguredTable">
-                <option value="">暂无已配置表格</option>
-              </select>
-            </label>
-            <p id="activeWriteTarget" class="active-write-target is-empty">当前生效：暂无可写入表格</p>
-          </div>
-          <div class="feishu-config-actions">
-            <button id="refreshFeishuConfigsBtn" type="button">刷新配置</button>
-            <button id="manageFeishuConfigsBtn" type="button">管理配置</button>
-          </div>
-        </div>
-        <div id="dataProgress" class="data-progress" hidden>
-          <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
-          <progress id="dataProgressBar" max="100" value="0"></progress>
-        </div>
-      </section>
+      </details>
 
-      <section class="filter-panel">
-        <div class="filter-row">
+      <details class="filter-panel" open>
+        <summary class="filter-panel-summary">
+          <div>
+            <span class="filter-panel-kicker">DISCOVER</span>
+            <strong>搜索、筛选与排序</strong>
+            <small>快速定位达人，并按报价或数据表现排序。</small>
+          </div>
+          <span class="filter-panel-toggle"><b>筛选工具</b><i aria-hidden="true"></i></span>
+        </summary>
+        <div class="filter-panel-body">
+          <div class="filter-row">
           <label class="search-field">
             <span>搜索</span>
             <input id="searchInput" type="search" placeholder="昵称、红书号、地区、简介" />
@@ -89,9 +103,93 @@
             </select>
           </label>
         </div>
+        <div class="price-filter" aria-label="价位筛选">
+          <label>
+            <span>报价类型</span>
+            <select id="priceTypeFilter">
+              <option value="any">图文或视频</option>
+              <option value="picture">仅图文报价</option>
+              <option value="video">仅视频报价</option>
+            </select>
+          </label>
+          <label>
+            <span>最低价（元）</span>
+            <input id="priceMinInput" type="number" min="0" step="100" inputmode="numeric" placeholder="不限" />
+          </label>
+          <label>
+            <span>最高价（元）</span>
+            <input id="priceMaxInput" type="number" min="0" step="100" inputmode="numeric" placeholder="不限" />
+          </label>
+          <label class="quick-sort-field">
+            <span>排序</span>
+            <select id="performanceSort">
+              <option value="">默认顺序</option>
+              <option value="followers:desc">粉丝数最高优先</option>
+              <option value="followers:asc">粉丝数最低优先</option>
+              <option value="picturePrice:asc">图文报价最低优先</option>
+              <option value="picturePrice:desc">图文报价最高优先</option>
+              <option value="videoPrice:asc">视频报价最低优先</option>
+              <option value="videoPrice:desc">视频报价最高优先</option>
+              <option value="exposure:desc">合作曝光最高优先</option>
+              <option value="exposure:asc">合作曝光最低优先</option>
+              <option value="read:desc">合作阅读最高优先</option>
+              <option value="read:asc">合作阅读最低优先</option>
+              <option value="interaction:desc">合作互动最高优先</option>
+              <option value="interaction:asc">合作互动最低优先</option>
+              <option value="cpm:asc">CPM 最低优先</option>
+              <option value="cpm:desc">CPM 最高优先</option>
+              <option value="cpe:asc">CPE 最低优先</option>
+              <option value="cpe:desc">CPE 最高优先</option>
+            </select>
+          </label>
+          <button id="clearPriceFilterBtn" type="button">清除价位</button>
+        </div>
+        <div id="activeFilterBar" class="active-filter-bar" hidden>
+          <span>已生效筛选</span>
+          <div id="activeFilterChips" class="active-filter-chips"></div>
+          <button id="clearAllFiltersBtn" type="button">清除全部</button>
+        </div>
+        <details class="performance-filter-panel">
+          <summary>
+            <span>数据表现筛选</span>
+            <small id="performanceFilterSummary">曝光、阅读、互动、CPM、CPE · 已启用 0 项</small>
+          </summary>
+          <div class="performance-filter-body">
+            <div class="performance-presets">
+              <span>快捷条件</span>
+              <button type="button" data-performance-preset="high-read">高阅读</button>
+              <button type="button" data-performance-preset="high-interaction">高互动</button>
+              <button type="button" data-performance-preset="low-cpm">低 CPM</button>
+              <button type="button" data-performance-preset="low-cpe">低 CPE</button>
+            </div>
+            <div class="performance-range-grid">
+              <label><span>合作曝光</span><div><input id="cooperationExposureMin" inputmode="decimal" placeholder="最低" /><b>—</b><input id="cooperationExposureMax" inputmode="decimal" placeholder="最高" /></div></label>
+              <label><span>合作阅读</span><div><input id="cooperationReadMin" inputmode="decimal" placeholder="最低" /><b>—</b><input id="cooperationReadMax" inputmode="decimal" placeholder="最高" /></div></label>
+              <label><span>合作互动</span><div><input id="cooperationInteractionMin" inputmode="decimal" placeholder="最低" /><b>—</b><input id="cooperationInteractionMax" inputmode="decimal" placeholder="最高" /></div></label>
+              <label><span>CPM</span><div><input id="cpmMin" inputmode="decimal" placeholder="最低" /><b>—</b><input id="cpmMax" inputmode="decimal" placeholder="最高" /></div></label>
+              <label><span>CPE</span><div><input id="cpeMin" inputmode="decimal" placeholder="最低" /><b>—</b><input id="cpeMax" inputmode="decimal" placeholder="最高" /></div></label>
+            </div>
+            <button id="clearPerformanceFiltersBtn" type="button">清除本组</button>
+          </div>
+        </details>
+        </div>
+      </details>
+
+      <section class="facet-panel" aria-labelledby="facetPanelTitle">
+        <header class="facet-panel-header">
+          <div>
+            <span class="filter-panel-kicker">CLASSIFY</span>
+            <h2 id="facetPanelTitle">类目与标签</h2>
+          </div>
+          <p>人数会随上方筛选条件实时变化。</p>
+        </header>
         <div class="category-filter">
           <span>内容类目</span>
           <div id="categoryFilters" class="category-chips"></div>
+        </div>
+        <div class="category-filter">
+          <span>达人标签</span>
+          <div id="tagFilters" class="category-chips"></div>
         </div>
       </section>
 
@@ -108,10 +206,53 @@
           <span id="selectedCount">已选 0 位</span>
           <button id="writeFeishuBtn" type="button" class="primary" disabled>写入飞书表格</button>
         </div>
+        <div class="tag-manager">
+          <div>
+            <span>已选达人批量标签</span>
+            <small>输入一个或多个标签，或点击已有标签快速添加。</small>
+          </div>
+          <div class="tag-manager-actions">
+            <input id="customTagInput" type="text" list="customTagSuggestions" placeholder="例如：高性价比、母婴备选" />
+            <datalist id="customTagSuggestions"></datalist>
+            <button id="addTagBtn" type="button" class="primary">添加到已选</button>
+            <button id="removeTagBtn" type="button">从已选移除</button>
+          </div>
+          <div id="tagLibraryChips" class="tag-library-chips" aria-label="可复用标签库"></div>
+        </div>
       </section>
 
       <section id="favoriteList" class="favorite-list"></section>
     </main>
+    <dialog id="tagPickerDialog" class="tag-picker-dialog" aria-labelledby="tagPickerTitle">
+      <div class="tag-picker-shell">
+        <header class="tag-picker-header">
+          <div>
+            <span>TAG STUDIO</span>
+            <h2 id="tagPickerTitle">添加达人标签</h2>
+            <p id="tagPickerCreator">为当前达人选择或创建标签。</p>
+          </div>
+          <button id="closeTagPickerBtn" type="button" class="tag-picker-close" aria-label="关闭">×</button>
+        </header>
+        <section class="tag-picker-section">
+          <div class="tag-picker-section-title">
+            <strong>选择已有标签</strong>
+            <span>可同时选择多个</span>
+          </div>
+          <div id="tagPickerExistingTags" class="tag-picker-existing"></div>
+        </section>
+        <section class="tag-picker-section tag-picker-create">
+          <label for="tagPickerNewInput">创建新标签</label>
+          <input id="tagPickerNewInput" type="text" placeholder="输入新标签，多个标签可用逗号或顿号分隔" autocomplete="off" />
+          <small>新建标签会保存到标签库，之后可以继续分配给其他博主。</small>
+        </section>
+        <div id="tagPickerSelection" class="tag-picker-selection">暂未选择标签</div>
+        <p id="tagPickerError" class="tag-picker-error" hidden></p>
+        <footer class="tag-picker-footer">
+          <button id="cancelTagPickerBtn" type="button">取消</button>
+          <button id="saveTagPickerBtn" type="button" class="primary">添加标签</button>
+        </footer>
+      </div>
+    </dialog>
     <script src="favorites-data.js"></script>
     <script src="favorites.js"></script>
   </body>
