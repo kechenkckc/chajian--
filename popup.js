@@ -8,7 +8,7 @@ const DEFAULT_OPTIONS = {
   detailTraverseAllSheets: false,
   detailCaptureFansScreenshot: true,
   detailCaptureNoteScreenshot: true,
-  syncUpdateExisting: false,
+  syncUpdateExisting: true,
   syncUseFirstSheet: false,
   pageSize: 50,
   maxRows: 5000,
@@ -48,7 +48,6 @@ const exportBtn = document.getElementById("exportBtn");
 const stopExportBtn = document.getElementById("stopExportBtn");
 const syncValidateBtn = document.getElementById("syncValidateBtn");
 const backfillBtn = document.getElementById("backfillBtn");
-const syncUpdateExisting = document.getElementById("syncUpdateExisting");
 const syncUseFirstSheet = document.getElementById("syncUseFirstSheet");
 const detailTraverseAllSheets = document.getElementById("detailTraverseAllSheets");
 const detailCaptureFansScreenshot = document.getElementById("detailCaptureFansScreenshot");
@@ -68,6 +67,7 @@ let latestRows = [];
 let syncSource = "current";
 let detailMultiSheetAvailable = false;
 let syncMultiSheetAvailable = false;
+let syncUpdateExistingEnabled = DEFAULT_OPTIONS.syncUpdateExisting;
 let configuredTables = [];
 let collectionRunning = false;
 
@@ -271,7 +271,7 @@ function currentOptions() {
     detailTraverseAllSheets: detailTraverseAllSheets.checked,
     detailCaptureFansScreenshot: detailCaptureFansScreenshot.checked,
     detailCaptureNoteScreenshot: detailCaptureNoteScreenshot.checked,
-    syncUpdateExisting: syncUpdateExisting.checked,
+    syncUpdateExisting: syncUpdateExistingEnabled,
     syncUseFirstSheet: syncUseFirstSheet.checked,
     pageSize: Number(fields.pageSize.value || DEFAULT_OPTIONS.pageSize),
     maxRows: Number(fields.maxRows.value || DEFAULT_OPTIONS.maxRows),
@@ -406,7 +406,7 @@ async function loadOptions() {
   detailTraverseAllSheets.checked = Boolean(options.detailTraverseAllSheets);
   detailCaptureFansScreenshot.checked = Boolean(options.detailCaptureFansScreenshot);
   detailCaptureNoteScreenshot.checked = Boolean(options.detailCaptureNoteScreenshot);
-  syncUpdateExisting.checked = Boolean(options.syncUpdateExisting);
+  syncUpdateExistingEnabled = Boolean(options.syncUpdateExisting);
   syncUseFirstSheet.checked = Boolean(options.syncUseFirstSheet);
   detailMultiSheetAvailable = Boolean(options.detailTraverseAllSheets);
   syncMultiSheetAvailable = Boolean(options.syncUseFirstSheet);
@@ -833,7 +833,6 @@ writeToFeishuOnExport.addEventListener("change", () => {
 detailTraverseAllSheets.addEventListener("change", () => saveOptions().catch((error) => setStatus(error.message, true)));
 detailCaptureFansScreenshot.addEventListener("change", () => saveOptions().catch((error) => setStatus(error.message, true)));
 detailCaptureNoteScreenshot.addEventListener("change", () => saveOptions().catch((error) => setStatus(error.message, true)));
-syncUpdateExisting.addEventListener("change", () => saveOptions().catch((error) => setStatus(error.message, true)));
 syncUseFirstSheet.addEventListener("change", () => saveOptions().catch((error) => setStatus(error.message, true)));
 
 syncSourceCurrentBtn.addEventListener("click", () => setSyncSource("current"));

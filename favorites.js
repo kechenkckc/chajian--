@@ -1,5 +1,7 @@
 const STORAGE_KEY = "pgyPreFavorites";
 const TAG_LIBRARY_KEY = "pgyPreFavoriteTagLibrary";
+const DEFAULT_CUSTOM_COLUMNS = ["返点比例", "达人评价", "合作备注"];
+const CUSTOM_COLUMNS_INITIALIZED_KEY = "favoriteCustomColumnsInitialized";
 
 const favoriteCount = document.getElementById("favoriteCount");
 const favoriteList = document.getElementById("favoriteList");
@@ -154,7 +156,8 @@ async function saveImportFieldOptions() {
   await chrome.storage.local.set({
     favoriteRatingColumn: options.ratingColumn,
     favoriteRatingDisplay: options.ratingDisplay,
-    favoriteCustomColumns: options.customColumns
+    favoriteCustomColumns: options.customColumns,
+    [CUSTOM_COLUMNS_INITIALIZED_KEY]: true
   });
 }
 
@@ -353,6 +356,7 @@ async function applyConfiguredTableSelection() {
   setStatus(activeTable
     ? `选择已生效，预收藏达人将写入：${activeTableLabel()}。`
     : "当前没有可写入的飞书表格。", !activeTable);
+  if (activeTable) await refreshCooperationCounts({ announce: true });
 }
 
 async function refreshConfiguredTables() {
@@ -455,9 +459,30 @@ function normalizeTagList(value, limit = 30) {
   return tags;
 }
 
+function isOfficialCategorySource(value) {
+  return ["pgy_profile", "pgy_detail"].includes(String(value || "").trim());
+}
+
+function needsCategorySourceMigration(items) {
+  return (Array.isArray(items) ? items : []).some((item) => {
+    const categorySource = String(item?.categorySource || "").trim();
+    const storedCategoryTags = normalizeCategoryTags(item?.categoryTags, categorySource);
+    if (!storedCategoryTags.length) return false;
+    if (!isOfficialCategorySource(categorySource)) return true;
+    return storedCategoryTags.some((tag) => !DEFAULT_CATEGORIES.includes(tag));
+  });
+}
+
 function normalizeFavorites(items) {
   return (Array.isArray(items) ? items : [])
-    .map((item) => ({
+    .map((item) => {
+      const categorySource = String(item?.categorySource || "").trim();
+      const storedCategoryTags = normalizeCategoryTags(item?.categoryTags, categorySource);
+      const officialCategoryTags = isOfficialCategorySource(categorySource)
+        ? storedCategoryTags.filter((tag) => DEFAULT_CATEGORIES.includes(tag))
+        : [];
+      const migratedCustomTags = storedCategoryTags.filter((tag) => !officialCategoryTags.includes(tag));
+      return {
       userId: String(item?.userId || "").trim(),
       name: String(item?.name || "").trim(),
       avatar: normalizeAvatarUrl(item?.avatar),
@@ -471,18 +496,19 @@ function normalizeFavorites(items) {
       cooperationExposureMedian: String(item?.cooperationExposureMedian ?? "").trim(),
       cooperationReadMedian: String(item?.cooperationReadMedian ?? "").trim(),
       cooperationInteractionMedian: String(item?.cooperationInteractionMedian ?? "").trim(),
+      cooperationCount: String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim(),
       cooperationNoteCount: String(item?.cooperationNoteCount ?? "").trim(),
       cpmText: String(item?.cpmText ?? item?.cpm ?? item?.CPM ?? "").trim(),
       cpeText: String(item?.cpeText ?? item?.cpe ?? item?.CPE ?? "").trim(),
       quoteStatus: String(item?.quoteStatus || "").trim(),
       bio: sanitizeBio(item?.bio),
-      categoryTags: normalizeCategoryTags(item?.categoryTags, item?.categorySource),
-      customTags: normalizeTagList(item?.customTags),
+      categoryTags: officialCategoryTags,
+      customTags: normalizeTagList([...normalizeTagList(item?.customTags), ...migratedCustomTags]),
       rating: normalizeRating(item?.rating),
       customFields: Object.fromEntries(Object.entries(item?.customFields || {})
         .map(([key, value]) => [String(key || "").trim(), String(value ?? "").trim()])
         .filter(([key, value]) => key && value)),
-      categorySource: String(item?.categorySource || "").trim(),
+      categorySource: officialCategoryTags.length ? categorySource : "",
       source: String(item?.source || "").trim(),
       acquisitionSources: normalizeAcquisitionSources(item?.acquisitionSources, item?.source),
       xhsUrl: String(item?.xhsUrl || "").trim(),
@@ -494,7 +520,8 @@ function normalizeFavorites(items) {
       lastDataRefreshAt: String(item?.lastDataRefreshAt || item?.quoteFetchedAt || "").trim(),
       lastRefreshFailedAt: String(item?.lastRefreshFailedAt || "").trim(),
       feishuWriteHistory: normalizeWriteHistory(item?.feishuWriteHistory, String(item?.status || "").trim())
-    }))
+      };
+    })
     .filter((item) => item.userId);
 }
 
@@ -660,12 +687,12 @@ function matchesFavoriteFilters(item, { ignoreCategory = false, ignoreTag = fals
   if (status.startsWith("table:") && !writeHistory.some((entry) => entry.key === status.slice(6))) return false;
   if (acquisition && !(item.acquisitionSources || []).some((entry) => entry.key === acquisition)) return false;
   if (!ignoreCategory) {
-    if (activeCategory === "未分类" && (item.categoryTags || []).length) return false;
-    if (activeCategory && activeCategory !== "未分类" && !(item.categoryTags || []).includes(activeCategory)) return false;
+    if (activeCategory === "未识别官方类目" && (item.categoryTags || []).length) return false;
+    if (activeCategory && activeCategory !== "未识别官方类目" && !(item.categoryTags || []).includes(activeCategory)) return false;
   }
   if (!ignoreTag) {
-    if (activeTag === "未标签" && (item.customTags || []).length) return false;
-    if (activeTag && activeTag !== "未标签" && !(item.customTags || []).includes(activeTag)) return false;
+    if (activeTag === "无用户标签" && (item.customTags || []).length) return false;
+    if (activeTag && activeTag !== "无用户标签" && !(item.customTags || []).includes(activeTag)) return false;
   }
   if (!matchesPriceFilter(item)) return false;
   if (!matchesPerformanceFilters(item)) return false;
@@ -684,7 +711,7 @@ function allCategoryTags() {
   for (const category of DEFAULT_CATEGORIES) counts.set(category, 0);
   const matchingFavorites = favorites.filter((item) => matchesFavoriteFilters(item, { ignoreCategory: true }));
   for (const item of matchingFavorites) {
-    const tags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
+    const tags = (item.categoryTags || []).length ? item.categoryTags : ["未识别官方类目"];
     for (const tag of tags) {
       counts.set(tag, (counts.get(tag) || 0) + 1);
     }
@@ -717,13 +744,13 @@ function renderCategoryFilters() {
 function allCustomTags() {
   const counts = new Map();
   for (const item of favorites) {
-    const tags = (item.customTags || []).length ? item.customTags : ["未标签"];
+    const tags = (item.customTags || []).length ? item.customTags : ["无用户标签"];
     for (const tag of tags) counts.set(tag, 0);
   }
   if (activeTag && !counts.has(activeTag)) counts.set(activeTag, 0);
   const matchingFavorites = favorites.filter((item) => matchesFavoriteFilters(item, { ignoreTag: true }));
   for (const item of matchingFavorites) {
-    const tags = (item.customTags || []).length ? item.customTags : ["未标签"];
+    const tags = (item.customTags || []).length ? item.customTags : ["无用户标签"];
     for (const tag of tags) counts.set(tag, (counts.get(tag) || 0) + 1);
   }
   return Array.from(counts.entries()).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "zh-CN"));
@@ -796,8 +823,8 @@ function renderActiveFilters() {
     if (maximumInput.value) parts.push(`≤ ${maximumInput.value}`);
     if (parts.length) chips.push({ key: `performance:${field}`, label: `${performanceLabels[field]} ${parts.join(" · ")}` });
   });
-  if (activeCategory) chips.push({ key: "category", label: `类目：${activeCategory}` });
-  if (activeTag) chips.push({ key: "tag", label: `标签：${activeTag}` });
+  if (activeCategory) chips.push({ key: "category", label: `官方类目：${activeCategory}` });
+  if (activeTag) chips.push({ key: "tag", label: `用户标签：${activeTag}` });
   if (ratingMinInput.value || ratingMaxInput.value) {
     const parts = [];
     if (ratingMinInput.value) parts.push(`≥ ${ratingMinInput.value}`);
@@ -1109,12 +1136,45 @@ async function updateFavorite(userId) {
 
 async function loadFavorites() {
   const stored = await chrome.storage.local.get({ [STORAGE_KEY]: [], [TAG_LIBRARY_KEY]: [] });
-  favorites = normalizeFavorites(stored[STORAGE_KEY]);
+  const storedFavorites = stored[STORAGE_KEY];
+  const shouldMigrateCategories = needsCategorySourceMigration(storedFavorites);
+  favorites = normalizeFavorites(storedFavorites);
   tagLibrary = normalizeTagList([
     ...normalizeTagList(stored[TAG_LIBRARY_KEY]),
     ...favorites.flatMap((item) => item.customTags || [])
   ], 200);
+  if (shouldMigrateCategories) {
+    await chrome.storage.local.set({ [STORAGE_KEY]: favorites, [TAG_LIBRARY_KEY]: tagLibrary });
+  }
   renderFavorites();
+}
+
+async function refreshCooperationCounts({ announce = false } = {}) {
+  if (!activeTable?.url || !favorites.length) return;
+  const result = await chrome.runtime.sendMessage({
+    type: "INSPECT_CREATOR_COOPERATION_COUNTS",
+    url: activeTable.url,
+    rows: favorites.map((item) => ({
+      "达人ID": item.userId,
+      "小红书号": item.redId,
+      "主页链接": item.xhsUrl,
+      "蒲公英链接": item.pgyUrl
+    }))
+  });
+  if (!result?.ok) throw new Error(result?.message || "合作次数统计失败");
+  const counts = Array.isArray(result.counts) ? result.counts : [];
+  let changed = false;
+  const nextFavorites = favorites.map((item, index) => {
+    const nextCount = counts[index];
+    const normalizedCount = nextCount !== "" && nextCount !== null && nextCount !== undefined && Number.isFinite(Number(nextCount))
+      ? String(Math.max(0, Math.round(Number(nextCount))))
+      : "";
+    if (normalizedCount === item.cooperationCount) return item;
+    changed = true;
+    return { ...item, cooperationCount: normalizedCount };
+  });
+  if (changed) await saveFavorites(nextFavorites);
+  if (announce) setStatus(`合作次数已刷新：检查 ${result.inspectedChildCount || 0} 个子表。`);
 }
 
 async function saveFavorites(nextFavorites) {
@@ -1158,7 +1218,7 @@ function renderFavorites() {
     const initial = avatarInitial(name);
     const pgyUrl = item.pgyUrl || `https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/${encodeURIComponent(item.userId)}`;
     const xhsUrl = item.xhsUrl || `https://www.xiaohongshu.com/user/profile/${encodeURIComponent(item.userId)}`;
-    const categoryTags = (item.categoryTags || []).length ? item.categoryTags : ["未分类"];
+    const categoryTags = (item.categoryTags || []).length ? item.categoryTags : ["未识别官方类目"];
     const customTags = item.customTags || [];
     const performance = cooperationMetricValues(item);
     const quoteStatus = item.quoteStatus || (!item.picturePriceText && !item.videoPriceText ? "报价待补充" : "");
@@ -1181,6 +1241,9 @@ function renderFavorites() {
       </div>
     ` : "";
     const customFieldEntries = Object.entries(item.customFields || {}).filter(([, value]) => String(value || "").trim());
+    const cooperationCountNumber = Number(item.cooperationCount);
+    const cooperationCountKnown = item.cooperationCount !== "" && Number.isFinite(cooperationCountNumber) && cooperationCountNumber >= 0;
+    const cooperationCountText = cooperationCountKnown ? `${Math.round(cooperationCountNumber)} 次` : "待统计";
     const customDataHtml = customFieldEntries.length ? `
       <div class="custom-data-strip">
         ${customFieldEntries.map(([fieldName, value]) => `
@@ -1202,10 +1265,13 @@ function renderFavorites() {
           <div class="headline">
             <a class="profile-link nickname-link" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener" title="打开 ${escapeHtml(name)} 的蒲公英主页">${escapeHtml(name)}</a>
             <button type="button" class="headline-rating ${item.rating ? "has-rating" : ""}" data-action="edit-rating" title="${escapeHtml(item.rating?.columnName || ratingColumnInput.value || "达人评分")}，点击设置 0-5 分">${escapeHtml(headlineRatingText(item.rating))}</button>
-            <div class="tag-list">${categoryTags.map((tag) => `<span class="tag category-tag">${escapeHtml(tag)}</span>`).join("")}</div>
+            <div class="cooperation-count-badge ${cooperationCountKnown ? "is-known" : "is-pending"}" title="按当前在线大表中出现过该达人的不同子表数量实时统计">
+              <span>合作次数</span><strong>${escapeHtml(cooperationCountText)}</strong>
+            </div>
+            <div class="tag-list" title="蒲公英官方类目">${categoryTags.map((tag) => `<span class="tag category-tag">${escapeHtml(tag)}</span>`).join("")}</div>
           </div>
           <div class="custom-tag-list">
-            <span class="custom-tag-label">标签</span>
+            <span class="custom-tag-label">用户标签</span>
             ${customTags.length
               ? customTags.map((tag) => `<span class="tag custom-tag">${escapeHtml(tag)}</span>`).join("")
               : `<span class="no-custom-tag">未设置</span>`}
@@ -1304,7 +1370,7 @@ function selectedFavorites() {
 async function applyTagsToSelected(mode, providedTags = null) {
   const tags = normalizeTagList(providedTags || customTagInput.value);
   if (!tags.length) throw new Error("请输入至少一个标签。");
-  if (!selectedUserIds.size) throw new Error("请先勾选要分配标签的达人。");
+  if (!selectedUserIds.size) throw new Error("请先勾选要分配用户标签的达人。");
   const selected = new Set(selectedUserIds);
   if (mode !== "remove") tagLibrary = normalizeTagList([...tagLibrary, ...tags], 200);
   const next = favorites.map((item) => {
@@ -1320,13 +1386,13 @@ async function applyTagsToSelected(mode, providedTags = null) {
   });
   await saveFavorites(next);
   customTagInput.value = "";
-  setStatus(`已为 ${selected.size} 位达人${mode === "remove" ? "移除" : "添加"}标签：${tags.join("、")}。`);
+  setStatus(`已为 ${selected.size} 位达人${mode === "remove" ? "移除" : "添加"}用户标签：${tags.join("、")}。`);
 }
 
 async function editFavoriteTags(userId) {
   const item = favorites.find((favorite) => favorite.userId === userId);
   if (!item) return;
-  const value = window.prompt("编辑达人标签（多个标签可用逗号或顿号分隔，清空表示移除全部标签）", (item.customTags || []).join("、"));
+  const value = window.prompt("编辑用户标签 / 达人类型（多个值可用逗号或顿号分隔，清空表示移除全部）", (item.customTags || []).join("、"));
   if (value === null) return;
   const customTags = normalizeTagList(value);
   tagLibrary = normalizeTagList([...tagLibrary, ...customTags], 200);
@@ -1394,7 +1460,7 @@ async function saveTagPicker() {
     ? { ...favorite, customTags, updatedAt: new Date().toISOString() }
     : favorite));
   closeTagPicker();
-  setStatus(`已为「${item.name || item.userId}」添加标签：${addedTags.join("、")}。`);
+  setStatus(`已为「${item.name || item.userId}」添加用户标签：${addedTags.join("、")}。`);
 }
 
 function favoriteToFeishuRow(item) {
@@ -1448,7 +1514,7 @@ async function syncSelectedToFeishu() {
   const options = await chrome.storage.local.get({
     feishuAppId: "",
     feishuAppSecret: "",
-    syncUpdateExisting: false,
+    syncUpdateExisting: true,
     syncUseFirstSheet: false
   });
   if (!activeTable) throw new Error("请先选择要写入的已配置飞书表格。");
@@ -1701,7 +1767,9 @@ favoriteConfiguredTable.addEventListener("change", () => applyConfiguredTableSel
 refreshFeishuConfigsBtn.addEventListener("click", () => refreshConfiguredTables().catch((error) => setStatus(error.message, true)));
 manageFeishuConfigsBtn.addEventListener("click", () => openFeishuConfigPage().catch((error) => setStatus(error.message, true)));
 
-refreshBtn.addEventListener("click", () => loadFavorites().catch((error) => setStatus(error.message, true)));
+refreshBtn.addEventListener("click", () => Promise.all([loadFavorites(), loadConfiguredTables()])
+  .then(() => refreshCooperationCounts({ announce: true }))
+  .catch((error) => setStatus(error.message, true)));
 clearBtn.addEventListener("click", () => clearFavorites().catch((error) => setStatus(error.message, true)));
 batchRemoveBtn.addEventListener("click", () => removeFilteredFavorites().catch((error) => setStatus(error.message, true)));
 exportBtn.addEventListener("click", () => exportFavorites().catch((error) => setStatus(error.message, true)));
@@ -1754,14 +1822,27 @@ chrome.storage.local.get({
   favoriteOnlineTagColumn: "",
   favoriteRatingColumn: "达人评分",
   favoriteRatingDisplay: "stars",
-  favoriteCustomColumns: []
-}).then((stored) => {
+  favoriteCustomColumns: [],
+  [CUSTOM_COLUMNS_INITIALIZED_KEY]: false
+}).then(async (stored) => {
   onlineTableUrl.value = stored.favoriteOnlineTableUrl || "";
   onlineTagColumn.value = stored.favoriteOnlineTagColumn || "";
   ratingColumnInput.value = stored.favoriteRatingColumn || "达人评分";
   ratingDisplaySelect.value = stored.favoriteRatingDisplay === "score" ? "score" : "stars";
-  customColumnsInput.value = normalizeCustomColumnNames(stored.favoriteCustomColumns).join("、");
+  const savedCustomColumns = normalizeCustomColumnNames(stored.favoriteCustomColumns);
+  const customColumns = stored[CUSTOM_COLUMNS_INITIALIZED_KEY]
+    ? savedCustomColumns
+    : normalizeCustomColumnNames([...DEFAULT_CUSTOM_COLUMNS, ...savedCustomColumns]);
+  customColumnsInput.value = customColumns.join("、");
+  if (!stored[CUSTOM_COLUMNS_INITIALIZED_KEY]) {
+    await chrome.storage.local.set({
+      favoriteCustomColumns: customColumns,
+      [CUSTOM_COLUMNS_INITIALIZED_KEY]: true
+    });
+  }
   renderFavorites();
 }).catch(() => null);
 
-Promise.all([loadFavorites(), loadConfiguredTables()]).catch((error) => setStatus(error.message, true));
+Promise.all([loadFavorites(), loadConfiguredTables()])
+  .then(() => refreshCooperationCounts())
+  .catch((error) => setStatus(error.message, true));

@@ -64,7 +64,7 @@
             </label>
             <label class="custom-columns-setting">
               <span>其他读取列</span>
-              <input id="customColumnsInput" type="text" placeholder="例如：返点数据、达人评价（多个列名用逗号分隔）" />
+              <input id="customColumnsInput" type="text" value="返点比例、达人评价、合作备注" placeholder="多个列名用逗号分隔" />
             </label>
           </div>
           <div class="online-import">
@@ -75,10 +75,10 @@
             </div>
             <div class="online-import-settings">
               <label for="onlineTagColumn">
-                <span>标签列名</span>
-                <input id="onlineTagColumn" type="text" placeholder="默认识别：标签 / 达人标签 / 自定义标签" />
+                <span>用户标签列名</span>
+                <input id="onlineTagColumn" type="text" placeholder="默认识别：达人类型 / 标签 / 达人标签 / 自定义标签" />
               </label>
-              <p>填写后，将按该列读取达人标签，并应用到所有选中的子表。</p>
+              <p>填写后，将按该列读取用户在表格中设置的达人类型或标签，并应用到所有选中的子表。</p>
             </div>
             <div id="onlineSheetPicker" class="online-sheet-picker" hidden>
               <div class="online-sheet-picker-head">
@@ -236,16 +236,16 @@
         <header class="facet-panel-header">
           <div>
             <span class="filter-panel-kicker">CLASSIFY</span>
-            <h2 id="facetPanelTitle">类目与标签</h2>
+            <h2 id="facetPanelTitle">官方类目与用户标签</h2>
           </div>
-          <p>人数会随上方筛选条件实时变化。</p>
+          <p>类目来自蒲公英官方，标签来自用户表格或手动设置；人数会随筛选实时变化。</p>
         </header>
         <div class="category-filter">
-          <span>内容类目</span>
+          <span>蒲公英官方类目</span>
           <div id="categoryFilters" class="category-chips"></div>
         </div>
         <div class="category-filter">
-          <span>达人标签</span>
+          <span>用户标签 / 达人类型</span>
           <div id="tagFilters" class="category-chips"></div>
         </div>
       </section>
@@ -266,8 +266,8 @@
         </div>
         <div class="tag-manager">
           <div>
-            <span>已选达人批量标签</span>
-            <small>输入一个或多个标签，或点击已有标签快速添加。</small>
+            <span>已选达人批量用户标签</span>
+            <small>输入用户定义的达人类型或标签，也可点击已有标签快速添加。</small>
           </div>
           <div class="tag-manager-actions">
             <input id="customTagInput" type="text" list="customTagSuggestions" placeholder="例如：高性价比、母婴备选" />
@@ -286,8 +286,8 @@
         <header class="tag-picker-header">
           <div>
             <span>TAG STUDIO</span>
-            <h2 id="tagPickerTitle">添加达人标签</h2>
-            <p id="tagPickerCreator">为当前达人选择或创建标签。</p>
+            <h2 id="tagPickerTitle">添加用户标签</h2>
+            <p id="tagPickerCreator">为当前达人选择或创建用户自定义的达人类型 / 标签。</p>
           </div>
           <button id="closeTagPickerBtn" type="button" class="tag-picker-close" aria-label="关闭">×</button>
         </header>

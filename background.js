@@ -2793,6 +2793,30 @@ async function buildSheetCooperationIndex(token, spreadsheetToken, sheets) {
   return { index, valuesBySheetId, inspectedChildCount: inspectedSheetIds.size };
 }
 
+async function inspectCreatorCooperationCounts(url, rows) {
+  const cleanUrl = String(url || "").trim();
+  if (!cleanUrl) throw new Error("缺少用于统计合作次数的飞书大表链接。");
+  const options = await chrome.storage.local.get({ feishuAppId: "", feishuAppSecret: "" });
+  if (!options.feishuAppId || !options.feishuAppSecret) throw new Error("统计合作次数前，请先配置飞书 App ID 和 App Secret。");
+  const token = await tenantToken(options.feishuAppId, options.feishuAppSecret);
+  const target = await resolveWikiTarget(parseFeishuUrl(cleanUrl), token);
+  let cooperationSnapshot;
+  if (target.resourceType === "bitable") {
+    const tables = await listBitableTables(token, target.token);
+    cooperationSnapshot = await buildBitableCooperationIndex(token, target.token, tables);
+  } else if (target.resourceType === "sheet") {
+    const sheets = await listSheets(token, target.token);
+    cooperationSnapshot = await buildSheetCooperationIndex(token, target.token, sheets);
+  } else {
+    throw new Error("合作次数统计仅支持飞书电子表格或多维表格。");
+  }
+  return {
+    ok: true,
+    counts: (Array.isArray(rows) ? rows : []).map((row) => cooperationCountForRow(cooperationSnapshot.index, row, "")),
+    inspectedChildCount: cooperationSnapshot.inspectedChildCount
+  };
+}
+
 function googleSheetCsvUrl(value) {
   const parsed = new URL(String(value || "").trim());
   if (parsed.hostname !== "docs.google.com") return parsed.toString();
@@ -2860,26 +2884,34 @@ async function readOnlineCreatorTable(url, selectedSheetIds = []) {
     if (target.resourceType === "bitable") {
       const tables = await listBitableTables(token, target.token);
       const tableMap = new Map(tables.map((table) => [table.table_id || table.id, table]));
+      const cooperationSnapshot = await buildBitableCooperationIndex(token, target.token, tables);
       const datasets = [];
       for (const tableId of requestedIds) {
         const table = tableMap.get(tableId);
         if (!table) throw new Error(`选择的子表不存在：${tableId}`);
-        const records = await readBitableRecords(token, target.token, tableId);
-        datasets.push({ id: tableId, title: table.name || table.title || tableId, rows: records.map((record) => record.fields || {}) });
+        const records = cooperationSnapshot.recordsByTableId.get(tableId) || [];
+        const rows = rowsWithCooperationCounts(records.map((record) => record.fields || {}), cooperationSnapshot.index, "");
+        datasets.push({ id: tableId, title: table.name || table.title || tableId, rows });
       }
       return { ok: true, source: "飞书多维表格", datasets };
     }
     if (target.resourceType !== "sheet") throw new Error("该飞书链接不是电子表格或多维表格。");
     const sheets = await listSheets(token, target.token);
     const sheetMap = new Map(sheets.map((sheet) => [sheet.sheet_id || sheet.id, sheet]));
+    const cooperationSnapshot = await buildSheetCooperationIndex(token, target.token, sheets);
     const datasets = [];
     for (const sheetId of requestedIds) {
       const sheet = sheetMap.get(sheetId);
       if (!sheet) throw new Error(`选择的子表不存在：${sheetId}`);
+      const values = cooperationSnapshot.valuesBySheetId.get(sheetId) || [];
+      const shape = detectSheetShape(values);
+      const rows = sheetRowsToShapeObjects(values, shape)
+        .filter((item) => Object.values(item.row || {}).some(nonEmptyCell))
+        .map((item) => item.row);
       datasets.push({
         id: sheetId,
         title: sheet.title || sheet.name || sheetId,
-        matrix: await readSheetValuesFlexible(token, target.token, sheetId)
+        rows: rowsWithCooperationCounts(rows, cooperationSnapshot.index, "")
       });
     }
     return { ok: true, source: "飞书电子表格", datasets };
@@ -3397,6 +3429,18 @@ async function waitForTabComplete(tabId, timeoutMs = 25000) {
   return chrome.tabs.get(tabId).catch(() => null);
 }
 
+async function requireDetailTab(tabId) {
+  const tab = await chrome.tabs.get(tabId).catch(() => null);
+  const currentUrl = String(tab?.url || "");
+  if (!currentUrl.includes("/solar/pre-trade/blogger-detail/")) {
+    const error = new Error("达人详情页未正常打开，可能登录已失效或当前账号没有查看权限。请重新登录蒲公英后再收藏。");
+    error.authRequired = true;
+    error.requiresUserAction = true;
+    throw error;
+  }
+  return tab;
+}
+
 function percentText(value) {
   if (value === null || value === undefined || value === "") return "";
   const number = Number(value);
@@ -3644,7 +3688,19 @@ function mergeDetailApiCache(detail, apiCache) {
   if (profile.contentTags !== undefined && !result.contentTags) result.contentTags = profile.contentTags;
 
   if (dailySummary.readMedian !== undefined && !result.daily_read_median) result.daily_read_median = numericValue(dailySummary.readMedian);
-  if (dailySummary.mAccumImpNum !== undefined && !result.daily_exposure_median) result.daily_exposure_median = numericValue(dailySummary.mAccumImpNum);
+  const dailyExposureMedian = positiveCountValue(
+    dailyRate.impMedian,
+    dailySummary.mAccumImpNum,
+    dailySummary.impMedian,
+    dailyRate.mAccumImpNum,
+    dailyRate.exposureMedian,
+    listProfile.accumCommonImpMedinNum30d,
+    detailProfile.accumCommonImpMedinNum30d
+  );
+  const existingDailyExposureMedian = numericValue(result.daily_exposure_median);
+  if (dailyExposureMedian !== "" && !(typeof existingDailyExposureMedian === "number" && existingDailyExposureMedian > 0)) {
+    result.daily_exposure_median = dailyExposureMedian;
+  }
   if ((dailySummary.mEngagementNum || dailySummary.interactionMedian) !== undefined && !result.daily_interaction_median) {
     result.daily_interaction_median = numericValue(dailySummary.mEngagementNum || dailySummary.interactionMedian);
   }
@@ -3929,12 +3985,19 @@ async function collectDetailPayloadWithCooldown(row, index, options = {}) {
       });
       if (fastPayload?.ok) return fastPayload;
       if (options.directExportFastMode) throw new Error("极速详情接口未返回有效数据");
-      const reusablePayload = await collectDetailPayloadWithReusableTab(row, index, options).catch(() => null);
+      const reusablePayload = await collectDetailPayloadWithReusableTab(row, index, options).catch((error) => {
+        if (options.favoriteTask && isDetailAuthError(error)) throw error;
+        return null;
+      });
       if (reusablePayload?.ok) return reusablePayload;
       return await collectDetailPayload(row, index, options);
     } catch (error) {
       if (options.directExportFastMode) throw error;
       const rateLimited = isDetailRateLimitError(error);
+      if (rateLimited && options.favoriteTask) {
+        if (error && typeof error === "object") error.paused = true;
+        throw error;
+      }
       if (!rateLimited || retries >= DETAIL_RATE_LIMIT_MAX_RETRIES) {
         if (rateLimited && error && typeof error === "object") error.paused = true;
         if (rateLimited) {
@@ -4314,6 +4377,15 @@ async function fetchFastDetailApiCacheFromTab(tabId, userId) {
     target: { tabId },
     world: "MAIN",
     func: async (requestList) => {
+      const fetchWithTimeout = async (url, init = {}, timeoutMs = 12000) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), timeoutMs);
+        try {
+          return await fetch(url, { ...init, signal: controller.signal });
+        } finally {
+          clearTimeout(timer);
+        }
+      };
       function safeData(payload) {
         if (payload && typeof payload === "object" && payload.data && typeof payload.data === "object") return payload.data;
         return payload && typeof payload === "object" ? payload : {};
@@ -4321,7 +4393,7 @@ async function fetchFastDetailApiCacheFromTab(tabId, userId) {
       const cache = {};
       const responses = await Promise.all(requestList.map(async (request) => {
         const absoluteUrl = new URL(request.url, location.origin).toString();
-        const response = await fetch(absoluteUrl, { credentials: "include" });
+        const response = await fetchWithTimeout(absoluteUrl, { credentials: "include" });
         const text = await response.text();
         let payload = {};
         try {
@@ -4402,12 +4474,15 @@ async function fetchBloggerListProfileFromTab(tabId, userId, nickname = "") {
       const keyword = String(targetNickname || targetUserId || "").trim();
       if (!keyword) return null;
       const request = async (path, body) => {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 12000);
         const response = await fetch(path, {
           method: "POST",
           credentials: "include",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify(body)
-        });
+          body: JSON.stringify(body),
+          signal: controller.signal
+        }).finally(() => clearTimeout(timer));
         if (!response.ok) return null;
         const payload = await response.json().catch(() => null);
         return payload?.data || payload || null;
@@ -4763,6 +4838,7 @@ async function collectDetailPayloadWithReusableTab(row, index, options = {}) {
     await chrome.tabs.update(tab.id, { url, active: !DETAIL_HEADLESS_MODE });
   }
   await waitForTabComplete(tab.id);
+  await requireDetailTab(tab.id);
   const apiCache = await readReusableDetailApiCache(tab.id);
   if (!apiCache?.ok && !apiCache?.responses?.length) return null;
   const existingOrganization = valueForCanonicalField(row, "所属机构");
@@ -4853,6 +4929,7 @@ async function collectDetailPayload(row, index, options = {}) {
   let keepTabOpen = false;
   try {
     await waitForTabComplete(tab.id);
+    await requireDetailTab(tab.id);
     return await collectDetailPayloadFromTab(tab, row, index, url, options);
   } catch (error) {
     if (isDetailAuthError(error)) {
@@ -4896,6 +4973,7 @@ async function collectDetailPayloadFromBackgroundTab(url, index = 0, options = {
   const tab = await withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: false }));
   try {
     await waitForTabComplete(tab.id);
+    await requireDetailTab(tab.id);
     return await collectDetailPayloadFromTab(tab, row, index, url, options);
   } catch (error) {
     if (isDetailAuthError(error)) {
@@ -4917,6 +4995,10 @@ async function collectCurrentDetailPayload(tab, index = 0, options = {}) {
   if (!tab?.id) throw new Error("无法定位当前达人详情页。");
   const url = tab.url || "";
   const row = rowFromDetailUrl(url);
+  if (tab.id > 0) {
+    await requireDetailTab(tab.id);
+    return collectDetailPayloadFromTab(tab, row, index, url, options);
+  }
   return collectDetailPayloadWithCooldown(row, index, options);
 }
 
@@ -5084,7 +5166,7 @@ async function appendDetailPayloadToBitable(target, payload) {
   return { ok: true, resourceType: "bitable", action: "appended", tableId, writtenCount: result.writtenCount };
 }
 
-async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
+async function favoriteCurrentDetailToFeishu({ tab, options = {}, onProgress = async () => {} }) {
   const saved = await chrome.storage.local.get({
     feishuAppId: "",
     feishuAppSecret: "",
@@ -5111,17 +5193,21 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {} }) {
       fieldName: bitableFieldName(field)
     })));
     const targetOptions = applyCollectionRequirements({ ...mergedOptions, detailFeishuSheetId: tableId }, requirements);
+    await onProgress({ step: 2, progress: 45, stageName: "从蒲公英抓取", message: "正在从蒲公英抓取达人完整详情" });
     const payload = await collectCurrentDetailPayload(tab, 0, targetOptions);
+    await onProgress({ step: 3, progress: 78, stageName: "写入飞书", message: "达人详情抓取完成，正在写入飞书多维表格" });
     return appendDetailPayloadToBitable({ token, parsed, options: targetOptions }, payload);
   }
   if (parsed.resourceType !== "sheet") throw new Error("收藏写回当前支持飞书电子表格或多维表格。");
   const sheetId = await chooseSheet(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.sheetId || "");
   const requirements = collectionRequirementsForSheetValues(await readSheetValues(token, parsed.token, sheetId, "A1:ZZ20"));
+  await onProgress({ step: 2, progress: 45, stageName: "从蒲公英抓取", message: "正在从蒲公英抓取达人完整详情" });
   const payload = await collectCurrentDetailPayload(tab, 0, applyCollectionRequirements(mergedOptions, requirements));
+  await onProgress({ step: 3, progress: 78, stageName: "写入飞书", message: "达人详情抓取完成，正在写入飞书电子表格" });
   return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
 }
 
-async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 }) {
+async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0, collectionTab = null }) {
   rowFromDetailUrl(url);
   detailStopRequested = false;
   const saved = await chrome.storage.local.get({
@@ -5134,50 +5220,75 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 
     detailFeishuUrl: "",
     detailFeishuSheetId: ""
   });
-  const mergedOptions = detailFavoriteOptions({ ...saved, ...(options || {}) });
+  const mergedOptions = detailFavoriteOptions({ ...saved, ...(options || {}), favoriteTask: true });
   if (!mergedOptions.feishuAppId || !mergedOptions.feishuAppSecret || !mergedOptions.detailFeishuUrl) {
     throw new Error("请先配置飞书 App ID、App Secret，并选择收藏目标表、详情表或同步表。");
   }
   const userId = (url.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
-  const task = favoriteCurrentDetailToFeishu({ tab: { id: -1, url }, options: mergedOptions })
-    .then((result) => {
-      notifyDetailBackfill(
-        "收藏写回完成",
-        `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
-      );
-      if (sourceTabId) {
-        chrome.tabs.sendMessage(sourceTabId, {
-          type: "PGY_FAVORITE_TASK_STATUS",
-          status: "completed",
-          userId,
-          result
-        }).catch(() => null);
-      }
-      return result;
-    })
-    .catch((error) => {
-      notifyDetailBackfill(
-        "收藏写回失败",
-        shortErrorMessage(error),
-        { requireInteraction: true }
-      );
-      if (sourceTabId) {
-        chrome.tabs.sendMessage(sourceTabId, {
-          type: "PGY_FAVORITE_TASK_STATUS",
-          status: "failed",
-          userId,
-          message: shortErrorMessage(error)
-        }).catch(() => null);
-      }
-      throw error;
+  let currentStage = 1;
+  let currentProgress = 12;
+  let currentStageName = "提交任务";
+  const reportProgress = async ({ step, progress, stageName, message }) => {
+    currentStage = Number(step || currentStage);
+    currentProgress = Number(progress || currentProgress);
+    currentStageName = String(stageName || currentStageName);
+    if (!sourceTabId) return;
+    await chrome.tabs.sendMessage(sourceTabId, {
+      type: "PGY_FAVORITE_TASK_STATUS",
+      status: "running",
+      step: currentStage,
+      progress: currentProgress,
+      stageName: currentStageName,
+      userId,
+      message
+    }).catch(() => null);
+  };
+  try {
+    const result = await favoriteCurrentDetailToFeishu({
+      tab: collectionTab?.id ? collectionTab : { id: -1, url },
+      options: mergedOptions,
+      onProgress: reportProgress
     });
-  task.catch(() => null);
-  return { ok: true, accepted: true, userId, detailUrl: url };
+    notifyDetailBackfill(
+      "收藏写回完成",
+      `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
+    );
+    if (sourceTabId) {
+      await chrome.tabs.sendMessage(sourceTabId, {
+        type: "PGY_FAVORITE_TASK_STATUS",
+        status: "completed",
+        step: 4,
+        progress: 100,
+        stageName: "完成",
+        userId,
+        result
+      }).catch(() => null);
+    }
+    return { ok: true, completed: true, userId, detailUrl: url, ...result };
+  } catch (error) {
+    notifyDetailBackfill(
+      "收藏写回失败",
+      shortErrorMessage(error),
+      { requireInteraction: true }
+    );
+    if (sourceTabId) {
+      await chrome.tabs.sendMessage(sourceTabId, {
+        type: "PGY_FAVORITE_TASK_STATUS",
+        status: "failed",
+        step: currentStage,
+        progress: currentProgress,
+        stageName: currentStageName,
+        userId,
+        message: shortErrorMessage(error)
+      }).catch(() => null);
+    }
+    throw error;
+  }
 }
 
 async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
   if (!tab?.id) throw new Error("无法定位当前达人详情页。");
-  return startFavoriteDetailToFeishu({ url: tab.url || "", options, sourceTabId: tab.id });
+  return startFavoriteDetailToFeishu({ url: tab.url || "", options, sourceTabId: tab.id, collectionTab: tab });
 }
 
 function shouldUseDetailCollection(options = {}) {
@@ -5849,6 +5960,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "READ_ONLINE_CREATOR_TABLE") {
       const result = await readOnlineCreatorTable(message.url || "", message.sheetIds || []);
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "INSPECT_CREATOR_COOPERATION_COUNTS") {
+      const result = await inspectCreatorCooperationCounts(message.url || "", message.rows || []);
       sendResponse(result);
       return;
     }

@@ -14,6 +14,7 @@
 
   const EXT_SOURCE = "pgy-exporter-extension";
   const PAGE_SOURCE = "pgy-exporter-page";
+  const DETAIL_TASK_SOURCE = "pgy-detail-capture";
   const DEFAULT_OPTIONS = {
     feishuAppId: "",
     feishuAppSecret: "",
@@ -24,7 +25,7 @@
     detailCaptureFansScreenshot: true,
     detailCaptureNoteScreenshot: true,
     collectionMode: "detail",
-    syncUpdateExisting: false,
+    syncUpdateExisting: true,
     syncUseFirstSheet: false,
     pageSize: 50,
     maxRows: 5000,
@@ -39,8 +40,12 @@
   let exportTask = {
     phase: "idle",
     step: 0,
+    steps: 3,
+    stageName: "等待开始",
     label: "等待任务",
     detail: "先在找达人页面完成筛选，再开始导出",
+    metaText: "等待开始",
+    progress: null,
     collected: 0,
     total: 0,
     startedAt: 0,
@@ -103,14 +108,33 @@
 
   function normalizeInviteBrand(brand) {
     if (!brand || typeof brand !== "object" || Array.isArray(brand)) return null;
+    const brandName = String(brand.label || brand.brandName || brand.name || "").trim();
+    const brandId = String(brand.value || brand.brandUserId || brand.userId || brand.id || "").trim();
+    if (!brandName && !brandId) return null;
     return {
-      label: String(brand.label || ""),
-      brandName: String(brand.brandName || ""),
-      value: String(brand.value || ""),
-      brandUserId: String(brand.brandUserId || ""),
+      label: brandName,
+      brandName,
+      value: brandId,
+      brandUserId: brandId,
       avatar: String(brand.avatar || ""),
       brandAvatar: String(brand.brandAvatar || "")
     };
+  }
+
+  function inviteBrandName(brand) {
+    return String(brand?.label || brand?.brandName || "").trim();
+  }
+
+  function inviteBrandId(brand) {
+    return String(brand?.value || brand?.brandUserId || "").trim();
+  }
+
+  function isInviteBrandResolved(brand) {
+    return Boolean(inviteBrandName(brand) && inviteBrandId(brand));
+  }
+
+  function normalizeInviteBrandName(value) {
+    return String(value || "").trim().replace(/\s+/g, " ").toLocaleLowerCase("zh-CN");
   }
 
   function normalizeInviteTemplate(template, index) {
@@ -129,7 +153,7 @@
 
   function normalizeLastInvite(snapshot) {
     if (!snapshot || typeof snapshot !== "object") return null;
-    const brand = normalizeInviteBrand(snapshot.brand);
+    const brand = normalizeInviteBrand(snapshot.brand || snapshot.form?.brand);
     const form = normalizeInviteForm(snapshot.form);
     const hasCustomFormValue = Object.entries(form).some(([key, value]) => value !== EMPTY_INVITE_FORM[key]);
     if (!brand && !hasCustomFormValue) return null;
@@ -150,8 +174,10 @@
   }
 
   function applyInviteSnapshot(snapshot) {
+    clearTimeout(brandSearchTimer);
+    brandRestoreRequest += 1;
     inviteState.form = normalizeInviteForm(snapshot?.form);
-    inviteState.brand = normalizeInviteBrand(snapshot?.brand);
+    inviteState.brand = normalizeInviteBrand(snapshot?.brand || snapshot?.form?.brand);
     inviteState.brandKeyword = String(snapshot?.brandKeyword || inviteState.brand?.label || inviteState.brand?.brandName || "");
     inviteState.brandResults = [];
     inviteState.brandLoading = false;
@@ -335,8 +361,12 @@
     exportTask = {
       phase: "list",
       step: 1,
+      steps: 3,
+      stageName: "读取列表",
       label: "读取达人列表",
       detail: "正在连接蒲公英列表接口",
+      metaText: "",
+      progress: null,
       collected: 0,
       total: 0,
       startedAt: Date.now(),
@@ -392,6 +422,7 @@
         updateExportTask({
           phase: "detail",
           step: 2,
+          stageName: "补全详情",
           label: "极速补全数据",
           detail: `正在并行补全 ${latestRows.length} 位达人的表现与粉丝画像`
         });
@@ -416,6 +447,7 @@
         updateExportTask({
           phase: "file",
           step: 3,
+          stageName: download ? "生成文件" : "整理数据",
           label: download ? "生成导出文件" : "整理同步数据",
           detail: `已补全 ${detailResult.completed || 0} 位，跳过 ${detailResult.failed || 0} 位`
         });
@@ -431,6 +463,7 @@
       finishExportTask({
         phase: result.stopped ? "stopped" : "done",
         step: result.stopped ? exportTask.step : 3,
+        stageName: result.stopped ? "已停止" : "完成",
         label: result.stopped ? "任务已停止" : (download ? "导出完成" : "采集完成"),
         detail: `${latestRows.length} 位达人 · ${download ? "文件已生成" : "数据已就绪"}`,
         collected: latestRows.length,
@@ -447,7 +480,7 @@
 
   async function stopExport() {
     latestProgress = "正在停止采集...";
-    updateExportTask({ phase: "stopping", label: "正在停止", detail: "正在安全结束当前请求" });
+    updateExportTask({ phase: "stopping", stageName: "停止任务", label: "正在停止", detail: "正在安全结束当前请求" });
     renderPanel();
     const [result] = await Promise.all([
       requestFromPage("STOP_EXPORT", {}, 8000),
@@ -476,7 +509,7 @@
     exportTask.finishedAt = 0;
     exportTicker = window.setInterval(() => renderPanel(), 1000);
     latestProgress = "正在写入飞书...";
-    updateExportTask({ phase: "file", step: 3, label: "写入飞书", detail: `正在写入 ${latestRows.length} 位达人` });
+    updateExportTask({ phase: "file", step: 3, stageName: "写入飞书", label: "写入飞书", detail: `正在写入 ${latestRows.length} 位达人` });
     try {
       const payload = await chrome.runtime.sendMessage({ type: "SYNC_FEISHU_DIRECT", rows: latestRows, options });
       if (!payload?.ok) throw new Error(payload?.message || "同步飞书失败");
@@ -485,6 +518,7 @@
       finishExportTask({
         phase: "done",
         step: 3,
+        stageName: "完成",
         label: "同步完成",
         detail: `${targetText}已写入 ${payload.writtenCount || latestRows.length} 位达人`
       });
@@ -554,6 +588,7 @@
   }
 
   let brandSearchTimer = 0;
+  let brandRestoreRequest = 0;
   let inviteComposingField = "";
   let pendingBrandRender = false;
 
@@ -563,6 +598,7 @@
 
   async function searchInviteBrands(keyword) {
     const value = String(keyword || "").trim();
+    brandRestoreRequest += 1;
     inviteState.brandKeyword = value;
     inviteState.brand = inviteState.brand?.label === value || inviteState.brand?.brandName === value ? inviteState.brand : null;
     inviteState.brandResults = [];
@@ -597,9 +633,52 @@
     }, 260);
   }
 
+  async function restoreInviteBrandSelection() {
+    const keyword = String(inviteState.brandKeyword || inviteBrandName(inviteState.brand)).trim();
+    if (!keyword || isInviteBrandResolved(inviteState.brand)) return;
+    clearTimeout(brandSearchTimer);
+    const requestId = ++brandRestoreRequest;
+    const storedBrandId = inviteBrandId(inviteState.brand);
+    inviteState.brand = null;
+    inviteState.brandLoading = true;
+    inviteState.brandResults = [];
+    inviteState.brandError = "";
+    renderBrandMenuOnly() || renderInviteModal();
+    try {
+      const result = await requestFromPage("PGY_INVITE_SEARCH_BRAND", { keyword }, 20000);
+      if (requestId !== brandRestoreRequest || inviteState.brandKeyword !== keyword) return;
+      const brands = Array.isArray(result.brands) ? result.brands : [];
+      const exactBrands = brands.filter((brand) => {
+        if (brand.disabled || !isInviteBrandResolved(brand)) return false;
+        if (storedBrandId && inviteBrandId(brand) === storedBrandId) return true;
+        return normalizeInviteBrandName(inviteBrandName(brand)) === normalizeInviteBrandName(keyword);
+      });
+      if (exactBrands.length === 1) {
+        inviteState.brand = normalizeInviteBrand(exactBrands[0]);
+        inviteState.brandKeyword = inviteBrandName(inviteState.brand);
+        inviteState.brandResults = [];
+        inviteState.status = `${inviteState.status ? `${inviteState.status} ` : ""}品牌“${inviteState.brandKeyword}”已自动识别。`;
+        inviteState.error = "";
+        scheduleInviteWorkspaceSave();
+      } else {
+        inviteState.brandResults = brands;
+        inviteState.brandError = brands.length ? "" : "未找到已保存的品牌，请重新搜索选择";
+      }
+    } catch (error) {
+      if (requestId !== brandRestoreRequest || inviteState.brandKeyword !== keyword) return;
+      inviteState.brandResults = [];
+      inviteState.brandError = error?.message || String(error);
+    } finally {
+      if (requestId === brandRestoreRequest && inviteState.brandKeyword === keyword) {
+        inviteState.brandLoading = false;
+        renderBrandMenuOnly() || renderInviteModal();
+      }
+    }
+  }
+
   function inviteFormComplete() {
     return Boolean(
-      inviteState.brand &&
+      isInviteBrandResolved(inviteState.brand) &&
       inviteState.form.productName.trim() &&
       inviteState.form.productDesc.trim() &&
       inviteState.form.startDate &&
@@ -705,11 +784,41 @@
       (document.body || document.documentElement).appendChild(modal);
     }
     renderInviteModal();
+    if (inviteState.brandKeyword && !isInviteBrandResolved(inviteState.brand)) void restoreInviteBrandSelection();
   }
 
   function closeInviteModal() {
     persistInviteWorkspace();
     document.getElementById("pgy-invite-modal")?.remove();
+  }
+
+  function updateDetailTask(payload = {}) {
+    if (exporting || !payload.label) return;
+    const status = String(payload.status || "running");
+    const isFinished = status === "completed" || status === "failed";
+    clearInterval(exportTicker);
+    exportTicker = 0;
+    exportTask = {
+      ...exportTask,
+      phase: status === "failed" ? "error" : (status === "completed" ? "done" : String(payload.phase || "detail-task")),
+      step: Math.max(0, Number(payload.step || 0)),
+      steps: Math.max(1, Number(payload.steps || 1)),
+      stageName: String(payload.stageName || "处理中"),
+      label: String(payload.label),
+      detail: status === "failed"
+        ? `卡在「${String(payload.stageName || "当前阶段")}」：${String(payload.detail || "任务执行失败")}`
+        : String(payload.detail || ""),
+      metaText: String(payload.metaText || "1 位达人"),
+      progress: Math.max(0, Math.min(100, Number(payload.progress || 0))),
+      collected: 0,
+      total: 0,
+      startedAt: payload.resetTimer === false && exportTask.startedAt ? exportTask.startedAt : Date.now(),
+      finishedAt: isFinished ? Date.now() : 0,
+      error: status === "failed"
+    };
+    if (!isFinished) exportTicker = window.setInterval(() => renderPanel(), 1000);
+    latestProgress = exportTask.detail;
+    renderPanel(exportTask.error);
   }
 
   function renderBloggerList() {
@@ -888,6 +997,7 @@
               <label class="pgy-invite-field pgy-invite-brand-field">
                 <span>品牌名 *</span>
                 <input data-field="brandKeyword" value="${escapeHtml(inviteState.brand?.label || inviteState.brand?.brandName || inviteState.brandKeyword)}" placeholder="请输入或搜索报备品牌">
+                ${isInviteBrandResolved(inviteState.brand) ? `<small class="pgy-invite-brand-resolved">已识别品牌 · ID: ${escapeHtml(inviteBrandId(inviteState.brand))}</small>` : ""}
                 ${renderBrandResults()}
               </label>
               <div class="pgy-invite-field">
@@ -981,9 +1091,11 @@
       inviteState.status = template ? `已加载信息模板“${template.name}”。` : "已取消模板关联，当前填写内容保持不变。";
       inviteState.error = "";
       renderInviteModal();
+      if (template && !isInviteBrandResolved(inviteState.brand)) void restoreInviteBrandSelection();
       return;
     }
     if (field === "brandKeyword") {
+      if (event.type === "change" && String(event.target.value || "").trim() === inviteState.brandKeyword) return;
       searchInviteBrands(event.target.value);
       return;
     }
@@ -1027,6 +1139,7 @@
       inviteState.error = "";
       scheduleInviteWorkspaceSave();
       renderInviteModal();
+      if (!isInviteBrandResolved(inviteState.brand)) void restoreInviteBrandSelection();
     }
     if (action === "build-draft") buildInviteDraft();
     if (action === "submit-real-invite") submitRealInvite();
@@ -1034,8 +1147,10 @@
     if (action === "select-brand") {
       const brand = inviteState.brandResults[Number(event.target.closest("[data-action]").dataset.index)];
       if (!brand) return;
-      inviteState.brand = brand;
-      inviteState.brandKeyword = brand.label || brand.brandName || "";
+      clearTimeout(brandSearchTimer);
+      brandRestoreRequest += 1;
+      inviteState.brand = normalizeInviteBrand(brand);
+      inviteState.brandKeyword = inviteBrandName(inviteState.brand);
       inviteState.brandResults = [];
       inviteState.brandError = "";
       inviteState.brandLoading = false;
@@ -1250,7 +1365,9 @@
       : "未采集当前筛选达人";
     const idle = exportTask.phase === "idle";
     const detail = idle ? captureText : exportTask.detail || latestProgress;
-    const progress = exportTask.total > 0 ? Math.min(100, Math.round((exportTask.collected / exportTask.total) * 100)) : 0;
+    const progress = Number.isFinite(exportTask.progress)
+      ? exportTask.progress
+      : (exportTask.total > 0 ? Math.min(100, Math.round((exportTask.collected / exportTask.total) * 100)) : 0);
     task.dataset.phase = exportTask.phase;
     task.querySelector(".pgy-exporter-task-state b").textContent = exportTask.label;
     task.querySelector(".pgy-exporter-task-label").textContent = idle ? "当前筛选数据" : exportTask.label;
@@ -1259,10 +1376,10 @@
     status.classList.toggle("is-error", Boolean(isError || exportTask.error));
     task.querySelector(".pgy-exporter-progress span").style.width = `${progress}%`;
     const meta = task.querySelectorAll(".pgy-exporter-meta span");
-    meta[0].textContent = `阶段 ${exportTask.step}/3`;
-    meta[1].textContent = exportTask.collected
+    meta[0].textContent = `阶段 ${exportTask.step}/${exportTask.steps || 3}${exportTask.stageName ? ` · ${exportTask.stageName}` : ""}`;
+    meta[1].textContent = exportTask.metaText || (exportTask.collected
       ? `${exportTask.collected}${exportTask.total && exportTask.total !== exportTask.collected ? ` / ${exportTask.total}` : ""} 位达人`
-      : "等待开始";
+      : "等待开始");
     const stopButton = panel.querySelector('[data-action="stop"]');
     if (stopButton) {
       stopButton.hidden = !exporting;
@@ -1289,8 +1406,12 @@
 
   window.addEventListener("message", (event) => {
     const message = event.data || {};
-    if (event.source !== window || message.source !== PAGE_SOURCE) return;
-    if (message.type === "CAPTURE_UPDATED") {
+    if (event.source !== window) return;
+    if (message.source === DETAIL_TASK_SOURCE && message.type === "PANEL_TASK_STATUS") {
+      updateDetailTask(message.payload || {});
+      return;
+    }
+    if (message.source === PAGE_SOURCE && message.type === "CAPTURE_UPDATED") {
       latestCapture = message.payload;
       renderPanel();
     }

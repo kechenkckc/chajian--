@@ -87,7 +87,9 @@
       headers: cleanHeaders(request.headers)
     };
     if (init.method !== "GET" && init.method !== "HEAD" && request.body) init.body = request.body;
-    const response = await nativeFetch(request.url, init);
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 12000);
+    const response = await nativeFetch(request.url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
     const text = await response.text();
     const payload = safeJson(text);
     cachePayload(request.url, payload, request);

@@ -8,7 +8,7 @@ const DEFAULT_OPTIONS = {
   detailTraverseAllSheets: false,
   detailCaptureFansScreenshot: true,
   detailCaptureNoteScreenshot: true,
-  syncUpdateExisting: false,
+  syncUpdateExisting: true,
   syncUseFirstSheet: false,
   pageSize: 50,
   maxRows: 5000,

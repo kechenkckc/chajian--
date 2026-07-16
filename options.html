@@ -77,6 +77,15 @@
         <p class="note">写入飞书前会先识别目标表字段并自动决定模式：存在详情或截图字段时全采集，否则快速采集。这里的设置仅用于不写入飞书的 CSV 导出。</p>
       </section>
 
+      <section class="band">
+        <h2>写入规则</h2>
+        <label class="inline">
+          <input id="syncUpdateExisting" type="checkbox" />
+          <span>重复达人更新已有行</span>
+        </label>
+        <p class="note">默认开启，影响直采达人、导出后写回和达人库批量写回。匹配到相同达人时更新原行；关闭后将跳过重复达人，不会新增重复行。详情收藏和达人补全不受此开关影响。</p>
+      </section>
+
       <div hidden>
         <input id="feishuUrl" type="hidden" />
         <input id="feishuSheetId" type="hidden" />
@@ -86,7 +95,6 @@
         <input id="maxRows" type="hidden" />
         <input id="detailLimit" type="hidden" />
         <input id="detailTraverseAllSheets" type="checkbox" />
-        <input id="syncUpdateExisting" type="checkbox" />
         <input id="syncUseFirstSheet" type="checkbox" />
       </div>
 
