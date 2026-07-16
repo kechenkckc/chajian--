@@ -235,6 +235,25 @@ function normalizeAcquisitionSources(value, legacySource = "") {
   return sources.filter((entry, index) => sources.findIndex((candidate) => candidate.key === entry.key) === index);
 }
 
+function cooperationCountFromAcquisitionSources(value) {
+  const childKeys = new Set();
+  for (const entry of Array.isArray(value) ? value : []) {
+    const key = String(entry?.key || "").trim();
+    const resourceId = String(entry?.resourceId || "").trim();
+    if (!key.startsWith("online:") || !resourceId) continue;
+    const url = String(entry?.url || "").trim();
+    childKeys.add(`${url || key.slice(0, key.lastIndexOf(":"))}:${resourceId}`);
+  }
+  return childKeys.size ? String(childKeys.size) : "";
+}
+
+function needsCooperationCountMigration(items) {
+  return (Array.isArray(items) ? items : []).some((item) => (
+    String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim() === ""
+    && cooperationCountFromAcquisitionSources(item?.acquisitionSources)
+  ));
+}
+
 function renderFeishuStatusOptions() {
   const previous = statusFilter.value;
   const targets = new Map();
@@ -482,6 +501,8 @@ function normalizeFavorites(items) {
         ? storedCategoryTags.filter((tag) => DEFAULT_CATEGORIES.includes(tag))
         : [];
       const migratedCustomTags = storedCategoryTags.filter((tag) => !officialCategoryTags.includes(tag));
+      const acquisitionSources = normalizeAcquisitionSources(item?.acquisitionSources, item?.source);
+      const storedCooperationCount = String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim();
       return {
       userId: String(item?.userId || "").trim(),
       name: String(item?.name || "").trim(),
@@ -496,7 +517,7 @@ function normalizeFavorites(items) {
       cooperationExposureMedian: String(item?.cooperationExposureMedian ?? "").trim(),
       cooperationReadMedian: String(item?.cooperationReadMedian ?? "").trim(),
       cooperationInteractionMedian: String(item?.cooperationInteractionMedian ?? "").trim(),
-      cooperationCount: String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim(),
+      cooperationCount: storedCooperationCount || cooperationCountFromAcquisitionSources(acquisitionSources),
       cooperationNoteCount: String(item?.cooperationNoteCount ?? "").trim(),
       cpmText: String(item?.cpmText ?? item?.cpm ?? item?.CPM ?? "").trim(),
       cpeText: String(item?.cpeText ?? item?.cpe ?? item?.CPE ?? "").trim(),
@@ -510,7 +531,7 @@ function normalizeFavorites(items) {
         .filter(([key, value]) => key && value)),
       categorySource: officialCategoryTags.length ? categorySource : "",
       source: String(item?.source || "").trim(),
-      acquisitionSources: normalizeAcquisitionSources(item?.acquisitionSources, item?.source),
+      acquisitionSources,
       xhsUrl: String(item?.xhsUrl || "").trim(),
       pgyUrl: String(item?.pgyUrl || "").trim(),
       status: String(item?.status || "预收藏").trim(),
@@ -1138,12 +1159,13 @@ async function loadFavorites() {
   const stored = await chrome.storage.local.get({ [STORAGE_KEY]: [], [TAG_LIBRARY_KEY]: [] });
   const storedFavorites = stored[STORAGE_KEY];
   const shouldMigrateCategories = needsCategorySourceMigration(storedFavorites);
+  const shouldMigrateCooperationCounts = needsCooperationCountMigration(storedFavorites);
   favorites = normalizeFavorites(storedFavorites);
   tagLibrary = normalizeTagList([
     ...normalizeTagList(stored[TAG_LIBRARY_KEY]),
     ...favorites.flatMap((item) => item.customTags || [])
   ], 200);
-  if (shouldMigrateCategories) {
+  if (shouldMigrateCategories || shouldMigrateCooperationCounts) {
     await chrome.storage.local.set({ [STORAGE_KEY]: favorites, [TAG_LIBRARY_KEY]: tagLibrary });
   }
   renderFavorites();
@@ -1166,9 +1188,13 @@ async function refreshCooperationCounts({ announce = false } = {}) {
   let changed = false;
   const nextFavorites = favorites.map((item, index) => {
     const nextCount = counts[index];
-    const normalizedCount = nextCount !== "" && nextCount !== null && nextCount !== undefined && Number.isFinite(Number(nextCount))
+    const inspectedCount = nextCount !== "" && nextCount !== null && nextCount !== undefined && Number.isFinite(Number(nextCount))
       ? String(Math.max(0, Math.round(Number(nextCount))))
       : "";
+    const sourceCount = cooperationCountFromAcquisitionSources(item.acquisitionSources);
+    const normalizedCount = inspectedCount && sourceCount
+      ? String(Math.max(Number(inspectedCount), Number(sourceCount)))
+      : inspectedCount || sourceCount || item.cooperationCount;
     if (normalizedCount === item.cooperationCount) return item;
     changed = true;
     return { ...item, cooperationCount: normalizedCount };
@@ -1265,7 +1291,7 @@ function renderFavorites() {
           <div class="headline">
             <a class="profile-link nickname-link" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener" title="打开 ${escapeHtml(name)} 的蒲公英主页">${escapeHtml(name)}</a>
             <button type="button" class="headline-rating ${item.rating ? "has-rating" : ""}" data-action="edit-rating" title="${escapeHtml(item.rating?.columnName || ratingColumnInput.value || "达人评分")}，点击设置 0-5 分">${escapeHtml(headlineRatingText(item.rating))}</button>
-            <div class="cooperation-count-badge ${cooperationCountKnown ? "is-known" : "is-pending"}" title="按当前在线大表中出现过该达人的不同子表数量实时统计">
+            <div class="cooperation-count-badge ${cooperationCountKnown ? "is-known" : "is-pending"}" title="优先按当前在线大表中出现过该达人的不同子表数量统计；旧版导入记录会用已读取的来源子表数量补齐">
               <span>合作次数</span><strong>${escapeHtml(cooperationCountText)}</strong>
             </div>
             <div class="tag-list" title="蒲公英官方类目">${categoryTags.map((tag) => `<span class="tag category-tag">${escapeHtml(tag)}</span>`).join("")}</div>

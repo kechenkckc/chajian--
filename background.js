@@ -141,7 +141,7 @@ const REFERENCE_EXPORT_HEADER_ROWS = [
 ];
 
 const FIELD_ALIASES = {
-  "达人ID": ["达人ID", "博主ID", "账号ID", "creator_id", "userId", "bloggerId", "kolId"],
+  "达人ID": ["达人ID", "博主ID", "账号ID", "用户ID", "蒲公英ID", "蒲公英达人ID", "creator_id", "userId", "bloggerId", "kolId"],
   "达人昵称": ["达人昵称", "达人名称", "达人名", "博主昵称", "博主名称", "博主名", "昵称", "账号昵称", "账号名称", "红书达人", "kol", "nickname", "nickName", "name"],
   "达人名称": ["达人名称", "达人昵称", "达人名", "博主名称", "博主昵称", "博主名", "昵称", "账号昵称", "账号名称", "红书达人", "nickname", "nickName", "name"],
   "蒲公英链接": ["蒲公英链接", "蒲公英主页", "蒲公英达人主页", "蒲公英达人链接", "达人链接", "博主链接", "蒲公英/LINK", "蒲公英link", "ID/Link", "蒲公英链接/星图链接", "pgy_url"],
