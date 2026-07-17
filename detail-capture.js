@@ -30,9 +30,9 @@
       phase: "favorite",
       step,
       steps: 4,
-      stageName: options.stageName || FAVORITE_STAGE_NAMES[step] || "收藏处理中",
+      stageName: options.stageName || FAVORITE_STAGE_NAMES[step] || "写入飞书处理中",
       progress: status === "completed" ? 100 : Number(options.progress || FAVORITE_STAGE_PROGRESS[step] || 12),
-      label: status === "failed" ? "收藏失败" : (status === "completed" ? "收藏完成" : "收藏达人到飞书"),
+      label: status === "failed" ? "写入飞书失败" : (status === "completed" ? "写入飞书完成" : "写入达人到飞书"),
       detail,
       metaText: options.metaText || "1 位达人",
       resetTimer: options.resetTimer
@@ -49,9 +49,9 @@
       phase: "prefavorite",
       step,
       steps: 4,
-      stageName: options.stageName || PREFAVORITE_STAGE_NAMES[step] || "预收藏处理中",
+      stageName: options.stageName || PREFAVORITE_STAGE_NAMES[step] || "进达人库处理中",
       progress: status === "completed" ? 100 : Number(options.progress || PREFAVORITE_STAGE_PROGRESS[step] || 12),
-      label: status === "failed" ? "预收藏失败" : (status === "completed" ? "预收藏完成" : "保存到预收藏达人库"),
+      label: status === "failed" ? "进达人库失败" : (status === "completed" ? "进达人库完成" : "保存到达人库"),
       detail,
       metaText: options.metaText || "1 位达人",
       resetTimer: options.resetTimer
@@ -163,17 +163,66 @@
     const avatarRect = findFavoriteAvatar(host)?.rect;
     if (!hostRect || !avatarRect) return false;
 
-    const buttonWidth = 204;
-    const buttonHeight = 30;
+    const buttonWidth = 96;
     const gap = 8;
     const minLeft = 8;
     const maxLeft = Math.max(minLeft, hostRect.width - buttonWidth - 8);
     const left = Math.min(maxLeft, Math.max(minLeft, avatarRect.left - hostRect.left + avatarRect.width / 2 - buttonWidth / 2));
-    const top = avatarRect.top - hostRect.top - buttonHeight - gap;
+    const originalPaddingTop = Number.parseFloat(host.style.getPropertyValue("--pgy-detail-favorite-original-padding-top")) || 0;
+    const top = originalPaddingTop + gap;
 
     button.style.setProperty("--pgy-detail-favorite-left", `${Math.round(left)}px`);
     button.style.setProperty("--pgy-detail-favorite-top", `${Math.round(top)}px`);
     return true;
+  }
+
+  function scheduleFavoriteButtonPlacement(button, host) {
+    window.cancelAnimationFrame(window.__PGY_DETAIL_FAVORITE_PLACEMENT_FRAME__ || 0);
+    window.__PGY_DETAIL_FAVORITE_PLACEMENT_FRAME__ = window.requestAnimationFrame(() => {
+      window.__PGY_DETAIL_FAVORITE_PLACEMENT_FRAME__ = 0;
+      if (button?.isConnected && host?.isConnected) placeFavoriteAboveAvatar(button, host);
+    });
+  }
+
+  function observeFavoriteButtonPlacement(button, host) {
+    if (window.__PGY_DETAIL_FAVORITE_OBSERVED_HOST__ === host) {
+      scheduleFavoriteButtonPlacement(button, host);
+      return;
+    }
+
+    window.__PGY_DETAIL_FAVORITE_RESIZE_OBSERVER__?.disconnect();
+    window.__PGY_DETAIL_FAVORITE_MUTATION_OBSERVER__?.disconnect();
+    if (window.__PGY_DETAIL_FAVORITE_LOAD_HOST__ && window.__PGY_DETAIL_FAVORITE_LOAD_HANDLER__) {
+      window.__PGY_DETAIL_FAVORITE_LOAD_HOST__.removeEventListener("load", window.__PGY_DETAIL_FAVORITE_LOAD_HANDLER__, true);
+    }
+
+    const updatePlacement = () => scheduleFavoriteButtonPlacement(button, host);
+    const resizeObserver = new ResizeObserver(updatePlacement);
+    resizeObserver.observe(host);
+    const avatar = findFavoriteAvatar(host)?.element;
+    if (avatar) resizeObserver.observe(avatar);
+
+    const mutationObserver = new MutationObserver(updatePlacement);
+    mutationObserver.observe(host, { childList: true, subtree: true, characterData: true });
+    host.addEventListener("load", updatePlacement, true);
+
+    window.__PGY_DETAIL_FAVORITE_RESIZE_OBSERVER__ = resizeObserver;
+    window.__PGY_DETAIL_FAVORITE_MUTATION_OBSERVER__ = mutationObserver;
+    window.__PGY_DETAIL_FAVORITE_LOAD_HOST__ = host;
+    window.__PGY_DETAIL_FAVORITE_LOAD_HANDLER__ = updatePlacement;
+    window.__PGY_DETAIL_FAVORITE_OBSERVED_HOST__ = host;
+
+    if (!window.__PGY_DETAIL_FAVORITE_RESIZE_HANDLER__) {
+      window.__PGY_DETAIL_FAVORITE_RESIZE_HANDLER__ = () => {
+        const currentButton = document.getElementById("pgy-detail-favorite-tools");
+        const currentHost = window.__PGY_DETAIL_FAVORITE_HOST__;
+        if (currentButton && currentHost?.isConnected) scheduleFavoriteButtonPlacement(currentButton, currentHost);
+      };
+      window.addEventListener("resize", window.__PGY_DETAIL_FAVORITE_RESIZE_HANDLER__, { passive: true });
+    }
+
+    document.fonts?.ready.then(updatePlacement).catch(() => null);
+    [80, 300, 900, 1800].forEach((delay) => window.setTimeout(updatePlacement, delay));
   }
 
   function ensureFavoriteStyle() {
@@ -184,10 +233,12 @@
       .pgy-detail-favorite-host {
         position: relative !important;
         overflow: visible !important;
+        padding-top: calc(var(--pgy-detail-favorite-original-padding-top, 0px) + 82px) !important;
       }
       #pgy-detail-favorite-tools {
         z-index: 20;
         display: inline-flex;
+        flex-direction: column;
         align-items: center;
         justify-content: center;
         gap: 6px;
@@ -237,7 +288,7 @@
         gap: 4px;
         min-width: 68px;
         height: 28px;
-        margin-left: auto;
+        margin-left: 0;
         padding: 0 9px;
         border: 1px solid rgba(255, 36, 72, 0.25);
         border-radius: 14px;
@@ -248,12 +299,25 @@
         white-space: nowrap;
         transition: background 0.16s ease, border-color 0.16s ease, color 0.16s ease;
       }
+      .pgy-similar-action-stack {
+        display: inline-flex;
+        flex: 0 0 auto;
+        flex-direction: column;
+        align-items: stretch;
+        justify-content: center;
+        gap: 6px;
+        margin-left: auto;
+      }
+      .pgy-similar-action-stack .pgy-similar-favorite-btn,
+      .pgy-similar-action-stack .pgy-similar-prefavorite-btn {
+        min-width: 92px;
+        margin-left: 0;
+      }
       .pgy-similar-favorite-btn:hover {
         border-color: rgba(255, 36, 72, 0.48);
         background: #fff5f7;
       }
       .pgy-similar-prefavorite-btn {
-        margin-left: 4px;
         border-color: rgba(36, 93, 60, 0.3);
         color: #245d3c;
         background: #f7ffe9;
@@ -304,6 +368,7 @@
     const mountedHost = window.__PGY_DETAIL_FAVORITE_HOST__;
     if (mountedHost?.isConnected) {
       if (button.parentElement !== mountedHost) mountedHost.appendChild(button);
+      observeFavoriteButtonPlacement(button, mountedHost);
       return true;
     }
 
@@ -316,6 +381,9 @@
       return true;
     }
 
+    if (!host.style.getPropertyValue("--pgy-detail-favorite-original-padding-top")) {
+      host.style.setProperty("--pgy-detail-favorite-original-padding-top", window.getComputedStyle(host).paddingTop || "0px");
+    }
     host.classList.add("pgy-detail-favorite-host");
     if (!placeFavoriteAboveAvatar(button, host)) {
       if ((window.__PGY_DETAIL_FAVORITE_RETRY_COUNT__ || 0) < 20) return false;
@@ -324,6 +392,7 @@
     }
     if (button.parentElement !== host) host.appendChild(button);
     window.__PGY_DETAIL_FAVORITE_HOST__ = host;
+    observeFavoriteButtonPlacement(button, host);
     return true;
   }
 
@@ -422,14 +491,14 @@
     } else {
       next.unshift(record);
     }
-    await onStage({ step: 2, progress: 42, stageName: "保存达人库", detail: "达人信息读取完成，正在保存到预收藏达人库" });
+    await onStage({ step: 2, progress: 42, stageName: "保存达人库", detail: "达人信息读取完成，正在保存到达人库" });
     await chrome.storage.local.set({ pgyPreFavorites: next });
-    await onStage({ step: 3, progress: 75, stageName: "补全报价数据", detail: "预收藏已保存，正在从蒲公英补全报价和分类" });
+    await onStage({ step: 3, progress: 75, stageName: "补全报价数据", detail: "已进入达人库，正在从蒲公英补全报价和分类" });
     try {
       const enrichment = await chrome.runtime.sendMessage({ type: "ENRICH_PREFAVORITE_QUOTE", userId });
       if (!enrichment?.ok) throw new Error(enrichment?.message || "报价补全失败");
     } catch (error) {
-      throw new Error(`达人已保存到预收藏达人库，但报价补全失败：${error?.message || String(error)}`);
+      throw new Error(`达人已保存到达人库，但报价补全失败：${error?.message || String(error)}`);
     }
     return { existing: existingIndex >= 0, count: next.length };
   }
@@ -439,7 +508,7 @@
     if (!userId || !button) return;
     const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
     const exists = Array.isArray(stored.pgyPreFavorites) && stored.pgyPreFavorites.some((item) => item?.userId === userId);
-    if (exists) button.textContent = "✓ 已预收藏";
+    if (exists) button.textContent = "✓ 已进达人库";
   }
 
   function detailUserIdFromUrl(value) {
@@ -540,7 +609,7 @@
 
   async function saveSimilarCardAsPreFavorite(card, detailUrl, onStage = async () => {}) {
     const userId = detailUserIdFromUrl(detailUrl);
-    if (!userId) throw new Error("暂未识别到这位达人的 ID，请先点击“查看详情”进入达人页面后预收藏。");
+    if (!userId) throw new Error("暂未识别到这位达人的 ID，请先点击“查看详情”进入达人页面后再加入达人库。");
     const cardText = cleanText(card.textContent || "");
     const now = new Date().toISOString();
     const record = {
@@ -577,14 +646,14 @@
     } else {
       next.unshift(record);
     }
-    await onStage({ step: 2, progress: 42, stageName: "保存达人库", detail: `已读取${record.name || "该达人"}的信息，正在保存到预收藏达人库` });
+    await onStage({ step: 2, progress: 42, stageName: "保存达人库", detail: `已读取${record.name || "该达人"}的信息，正在保存到达人库` });
     await chrome.storage.local.set({ pgyPreFavorites: next });
-    await onStage({ step: 3, progress: 75, stageName: "补全报价数据", detail: "预收藏已保存，正在从蒲公英补全报价和分类" });
+    await onStage({ step: 3, progress: 75, stageName: "补全报价数据", detail: "已进入达人库，正在从蒲公英补全报价和分类" });
     try {
       const enrichment = await chrome.runtime.sendMessage({ type: "ENRICH_PREFAVORITE_QUOTE", userId });
       if (!enrichment?.ok) throw new Error(enrichment?.message || "报价补全失败");
     } catch (error) {
-      throw new Error(`达人已保存到预收藏达人库，但报价补全失败：${error?.message || String(error)}`);
+      throw new Error(`达人已保存到达人库，但报价补全失败：${error?.message || String(error)}`);
     }
     return { existing: existingIndex >= 0, count: next.length };
   }
@@ -599,7 +668,7 @@
     for (const button of buttons) {
       if (button.disabled) continue;
       const exists = favoriteIds.has(button.dataset.userId || "");
-      const nextText = exists ? "✓ 已预收藏" : "☆ 预收藏";
+      const nextText = exists ? "✓ 已进达人库" : "☆ 进达人库";
       if (button.textContent !== nextText) button.textContent = nextText;
       button.classList.toggle("is-accepted", exists);
     }
@@ -619,31 +688,38 @@
       const userId = detailUserIdFromUrl(detailUrl) || `card-${cardIndex}`;
       if (userId === currentUserId || handledUserIds.has(userId)) continue;
       handledUserIds.add(userId);
+      let actionStack = card.querySelector(`.pgy-similar-action-stack[data-user-id="${CSS.escape(userId)}"]`);
+      if (!actionStack) {
+        actionStack = document.createElement("div");
+        actionStack.className = "pgy-similar-action-stack";
+        actionStack.dataset.userId = userId;
+        detailTrigger.before(actionStack);
+      }
       let favoriteButton = card.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(userId)}"]`);
       if (!favoriteButton) {
         favoriteButton = document.createElement("button");
         favoriteButton.type = "button";
         favoriteButton.className = "pgy-similar-favorite-btn";
         favoriteButton.dataset.userId = userId;
-        favoriteButton.textContent = "☆ 收藏";
-        favoriteButton.title = "采集这位达人的完整详情并收藏到飞书";
+        favoriteButton.textContent = "☆ 写入飞书";
+        favoriteButton.title = "采集这位达人的完整详情并写入飞书";
         favoriteButton.addEventListener("click", async (event) => {
           event.preventDefault();
           event.stopPropagation();
           event.stopImmediatePropagation();
           if (favoriteButton.disabled) return;
           favoriteButton.disabled = true;
-          favoriteButton.textContent = "收藏中...";
+          favoriteButton.textContent = "写入中...";
           const bloggerName = similarBloggerName(card);
-          reportFavoriteTask("running", `正在提交${bloggerName || "该达人"}的后台收藏任务`, { step: 1, progress: 12 });
+          reportFavoriteTask("running", `正在提交${bloggerName || "该达人"}的写入飞书任务`, { step: 1, progress: 12 });
           try {
-            if (!detailUrl) throw new Error("暂未识别到这位达人的详情地址，请先点击“查看详情”进入该达人页面后收藏。");
+            if (!detailUrl) throw new Error("暂未识别到这位达人的详情地址，请先点击“查看详情”进入该达人页面后写入飞书。");
             const result = await chrome.runtime.sendMessage({
               type: "FAVORITE_DETAIL_URL",
               detailUrl
             });
-            if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
-            favoriteButton.textContent = result.completed ? "✓ 已收藏" : "✓ 已发起";
+            if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
+            favoriteButton.textContent = result.completed ? "✓ 已写入飞书" : "✓ 已发起写入";
             favoriteButton.classList.add("is-accepted");
             reportFavoriteTask(
               result.completed ? "completed" : "running",
@@ -651,17 +727,17 @@
               { step: result.completed ? 4 : 2, progress: result.completed ? 100 : 45, resetTimer: false }
             );
             showFavoriteToast(result.completed
-              ? `已收藏${bloggerName || "该达人"}并写入飞书。`
-              : `已开始后台收藏${bloggerName || "该达人"}。`);
+              ? `已将${bloggerName || "该达人"}写入飞书。`
+              : `已开始后台写入${bloggerName || "该达人"}。`);
           } catch (error) {
-            favoriteButton.textContent = "☆ 收藏";
+            favoriteButton.textContent = "☆ 写入飞书";
             favoriteButton.disabled = false;
             reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
             showFavoriteToast(error?.message || String(error), true);
           }
         }, true);
-        detailTrigger.before(favoriteButton);
       }
+      if (favoriteButton.parentElement !== actionStack) actionStack.appendChild(favoriteButton);
 
       let preFavoriteButton = card.querySelector(`.pgy-similar-prefavorite-btn[data-user-id="${CSS.escape(userId)}"]`);
       if (!preFavoriteButton) {
@@ -669,7 +745,7 @@
         preFavoriteButton.type = "button";
         preFavoriteButton.className = "pgy-similar-prefavorite-btn";
         preFavoriteButton.dataset.userId = userId;
-        preFavoriteButton.textContent = "☆ 预收藏";
+        preFavoriteButton.textContent = "☆ 进达人库";
         preFavoriteButton.title = "将这位达人加入达人库，并在后台补全报价等信息";
         preFavoriteButton.addEventListener("click", async (event) => {
           event.preventDefault();
@@ -684,14 +760,14 @@
             const result = await saveSimilarCardAsPreFavorite(card, detailUrl, async (stage) => {
               reportPreFavoriteTask("running", stage.detail, { ...stage, resetTimer: false });
             });
-            preFavoriteButton.textContent = "✓ 已预收藏";
+            preFavoriteButton.textContent = "✓ 已进达人库";
             preFavoriteButton.classList.add("is-accepted");
             reportPreFavoriteTask("completed", result.existing ? `已更新${bloggerName || "该达人"}的预收藏信息` : `已加入达人库，当前共 ${result.count} 位达人`, { resetTimer: false });
             showFavoriteToast(result.existing ? `已更新${bloggerName}的预收藏信息。` : `已将${bloggerName}加入达人库，共 ${result.count} 位达人。`);
           } catch (error) {
             const errorMessage = error?.message || String(error);
-            const savedButEnrichmentFailed = errorMessage.startsWith("达人已保存到预收藏达人库");
-            preFavoriteButton.textContent = savedButEnrichmentFailed ? "✓ 已预收藏·报价待补" : "☆ 预收藏";
+            const savedButEnrichmentFailed = errorMessage.startsWith("达人已保存到达人库");
+            preFavoriteButton.textContent = savedButEnrichmentFailed ? "✓ 已进达人库·报价待补" : "☆ 进达人库";
             preFavoriteButton.classList.toggle("is-accepted", savedButEnrichmentFailed);
             reportPreFavoriteTask("failed", errorMessage, {
               progress: PREFAVORITE_STAGE_PROGRESS[preFavoriteTaskStep] || 12,
@@ -702,8 +778,8 @@
             preFavoriteButton.disabled = false;
           }
         }, true);
-        detailTrigger.before(preFavoriteButton);
       }
+      if (preFavoriteButton.parentElement !== actionStack) actionStack.appendChild(preFavoriteButton);
     }
     refreshSimilarPreFavoriteButtonStates(root).catch(() => null);
   }
@@ -731,17 +807,17 @@
       button = document.createElement("button");
       button.id = "pgy-detail-favorite-btn";
       button.type = "button";
-      button.textContent = "☆ 收藏";
+      button.textContent = "☆ 写入飞书";
       button.addEventListener("click", async () => {
         if (button.disabled) return;
         button.disabled = true;
-        button.textContent = "收藏中...";
-        reportFavoriteTask("running", "正在提交当前达人的后台收藏任务", { step: 1, progress: 12 });
+        button.textContent = "写入中...";
+        reportFavoriteTask("running", "正在提交当前达人的写入飞书任务", { step: 1, progress: 12 });
         showFavoriteToast("正在读取达人详情并写入飞书，请稍候。");
         try {
           const result = await chrome.runtime.sendMessage({ type: "FAVORITE_CURRENT_DETAIL" });
-          if (!result?.ok) throw new Error(result?.message || "收藏写回失败");
-          button.textContent = result.completed ? "✓ 已收藏" : "★ 后台收藏中";
+          if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
+          button.textContent = result.completed ? "✓ 已写入飞书" : "★ 后台写入中";
           if (result.completed) button.classList.add("is-accepted");
           reportFavoriteTask(
             result.completed ? "completed" : "running",
@@ -749,10 +825,10 @@
             { step: result.completed ? 4 : 2, progress: result.completed ? 100 : 45, resetTimer: false }
           );
           showFavoriteToast(result.completed
-            ? "收藏完成，达人数据已写入飞书。"
-            : "收藏任务已开始，完成后会系统通知。");
+            ? "写入完成，达人数据已写入飞书。"
+            : "写入任务已开始，完成后会系统通知。");
         } catch (error) {
-          button.textContent = "☆ 收藏";
+          button.textContent = "☆ 写入飞书";
           button.disabled = false;
           reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
           showFavoriteToast(error?.message || String(error), true);
@@ -764,7 +840,7 @@
       preFavoriteButton = document.createElement("button");
       preFavoriteButton.id = "pgy-detail-prefavorite-btn";
       preFavoriteButton.type = "button";
-      preFavoriteButton.textContent = "☆ 预收藏";
+      preFavoriteButton.textContent = "☆ 进达人库";
       preFavoriteButton.addEventListener("click", async () => {
         if (preFavoriteButton.disabled) return;
         preFavoriteButton.disabled = true;
@@ -774,13 +850,13 @@
           const result = await saveCurrentDetailAsPreFavorite(async (stage) => {
             reportPreFavoriteTask("running", stage.detail, { ...stage, resetTimer: false });
           });
-          preFavoriteButton.textContent = "✓ 已预收藏";
+          preFavoriteButton.textContent = "✓ 已进达人库";
           reportPreFavoriteTask("completed", result.existing ? "已更新当前达人的预收藏信息" : `已加入达人库，当前共 ${result.count} 位达人`, { resetTimer: false });
           showFavoriteToast(result.existing ? "已更新这位达人的预收藏信息。" : `已加入预收藏，共 ${result.count} 位达人。`);
         } catch (error) {
           const errorMessage = error?.message || String(error);
-          const savedButEnrichmentFailed = errorMessage.startsWith("达人已保存到预收藏达人库");
-          preFavoriteButton.textContent = savedButEnrichmentFailed ? "✓ 已预收藏·报价待补" : "☆ 预收藏";
+          const savedButEnrichmentFailed = errorMessage.startsWith("达人已保存到达人库");
+          preFavoriteButton.textContent = savedButEnrichmentFailed ? "✓ 已进达人库·报价待补" : "☆ 进达人库";
           preFavoriteButton.classList.toggle("is-accepted", savedButEnrichmentFailed);
           reportPreFavoriteTask("failed", errorMessage, {
             progress: PREFAVORITE_STAGE_PROGRESS[preFavoriteTaskStep] || 12,
@@ -1377,25 +1453,25 @@
         });
       } else if (message.status === "completed") {
         if (targetButton) {
-          targetButton.textContent = "✓ 已收藏";
+          targetButton.textContent = "✓ 已写入飞书";
           targetButton.disabled = true;
           targetButton.classList.add("is-accepted");
         }
         reportFavoriteTask("completed", "达人完整数据已写入飞书", { resetTimer: false });
-        showFavoriteToast("收藏完成，达人数据已写入飞书。");
+        showFavoriteToast("写入完成，达人数据已写入飞书。");
       } else if (message.status === "failed") {
         if (targetButton) {
-          targetButton.textContent = "☆ 收藏";
+          targetButton.textContent = "☆ 写入飞书";
           targetButton.disabled = false;
           targetButton.classList.remove("is-accepted");
         }
-        reportFavoriteTask("failed", message.message || "收藏写回失败", {
+        reportFavoriteTask("failed", message.message || "写入飞书失败", {
           step: Number(message.step || favoriteTaskStep || 1),
           progress: Number(message.progress || FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12),
           stageName: message.stageName || FAVORITE_STAGE_NAMES[favoriteTaskStep] || "当前阶段",
           resetTimer: false
         });
-        showFavoriteToast(message.message || "收藏写回失败", true);
+        showFavoriteToast(message.message || "写入飞书失败", true);
       }
       sendResponse({ ok: true });
       return false;

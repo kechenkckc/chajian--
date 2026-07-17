@@ -4,6 +4,7 @@
 
   const BAR_ID = "pgy-xhs-profile-bridge-bar";
   const DETAIL_BUTTON_ID = "pgy-xhs-profile-bridge";
+  const WRITE_BUTTON_ID = "pgy-xhs-profile-write";
   const FAVORITE_BUTTON_ID = "pgy-xhs-profile-favorite";
   const FLOAT_CLASS = "pgy-xhs-profile-bridge-floating";
   const DETAIL_BASE = "https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/";
@@ -233,25 +234,58 @@
     return button;
   }
 
+  function createWriteButton() {
+    const button = document.createElement("button");
+    button.id = WRITE_BUTTON_ID;
+    button.type = "button";
+    button.className = "pgy-xhs-profile-tool pgy-xhs-profile-write";
+    button.title = "采集当前达人的蒲公英完整详情并写入飞书";
+    button.innerHTML = `<span>飞</span><strong>写入飞书</strong>`;
+    button.addEventListener("click", async () => {
+      if (button.disabled) return;
+      const detailUrl = pgyDetailUrl();
+      if (!detailUrl) return;
+      button.disabled = true;
+      button.querySelector("strong").textContent = "写入中...";
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "FAVORITE_DETAIL_URL", detailUrl });
+        if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
+        button.classList.add("is-saved");
+        button.querySelector("strong").textContent = result.completed ? "已写入飞书" : "后台写入中";
+      } catch (error) {
+        button.classList.remove("is-saved");
+        button.title = error?.message || "写入飞书失败";
+        button.querySelector("strong").textContent = "写入失败";
+        setTimeout(() => {
+          button.title = "采集当前达人的蒲公英完整详情并写入飞书";
+          button.querySelector("strong").textContent = "写入飞书";
+        }, 1800);
+      } finally {
+        button.disabled = false;
+      }
+    });
+    return button;
+  }
+
   function createFavoriteButton() {
     const button = document.createElement("button");
     button.id = FAVORITE_BUTTON_ID;
     button.type = "button";
     button.className = "pgy-xhs-profile-tool pgy-xhs-profile-favorite";
-    button.title = "预收藏到后台收藏界面";
-    button.innerHTML = `<span>收</span><strong>预收藏</strong>`;
+    button.title = "将当前达人加入达人库";
+    button.innerHTML = `<span>库</span><strong>进达人库</strong>`;
     button.addEventListener("click", async () => {
       button.disabled = true;
       try {
         const result = await saveFavorite();
-        if (!result.ok) throw new Error(result.message || "预收藏失败");
+        if (!result.ok) throw new Error(result.message || "进达人库失败");
         refreshFavoriteQuote(currentXhsUserId());
         await updateFavoriteState();
         button.classList.add("is-saved");
-        button.querySelector("strong").textContent = result.existing ? "已更新" : "已预收藏";
+        button.querySelector("strong").textContent = "已进达人库";
         setTimeout(updateFavoriteState, 1400);
       } catch (error) {
-        button.querySelector("strong").textContent = error?.message || "收藏失败";
+        button.querySelector("strong").textContent = error?.message || "进达人库失败";
         setTimeout(updateFavoriteState, 1800);
       } finally {
         button.disabled = false;
@@ -264,9 +298,8 @@
     const button = document.createElement("button");
     button.type = "button";
     button.className = "pgy-xhs-profile-tool pgy-xhs-profile-open-favorites";
-    button.title = "打开后台收藏界面";
-    button.innerHTML = `<span>夹</span><strong>收藏后台</strong>`;
-    button.querySelector("strong").textContent = "\u6536\u85cf\u8fbe\u4eba\u5e93";
+    button.title = "打开达人库";
+    button.innerHTML = `<span>夹</span><strong>达人库</strong>`;
     button.addEventListener("click", () => {
       chrome.runtime.sendMessage({ type: "OPEN_FAVORITES_PAGE" });
     });
@@ -279,7 +312,7 @@
     bar = document.createElement("div");
     bar.id = BAR_ID;
     bar.className = FLOAT_CLASS;
-    bar.append(createDetailButton(), createFavoriteButton(), createFavoritesPageButton());
+    bar.append(createWriteButton(), createFavoriteButton(), createDetailButton(), createFavoritesPageButton());
     return bar;
   }
 
@@ -288,7 +321,7 @@
     if (!button) return;
     const saved = await isFavorited();
     button.classList.toggle("is-saved", saved);
-    button.querySelector("strong").textContent = saved ? "已预收藏" : "预收藏";
+    button.querySelector("strong").textContent = saved ? "已进达人库" : "进达人库";
   }
 
   function placeAtProfileHeader(bar, avatar) {
@@ -302,7 +335,9 @@
     }
     const width = 126;
     const left = Math.max(16, Math.round(cachedProfileAnchor.left - width - 38));
-    const top = Math.max(88, Math.round(cachedProfileAnchor.top + cachedProfileAnchor.height / 2 - 54));
+    const buttonCount = bar.children.length || 4;
+    const barHeight = buttonCount * 36 + Math.max(0, buttonCount - 1) * 8;
+    const top = Math.max(88, Math.round(cachedProfileAnchor.top + cachedProfileAnchor.height / 2 - barHeight / 2));
     bar.className = FLOAT_CLASS;
     bar.style.left = `${left}px`;
     bar.style.top = `${top}px`;
@@ -345,6 +380,30 @@
     observer = new MutationObserver(scheduleRender);
     observer.observe(document.documentElement, { childList: true, subtree: true });
   }
+
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (message?.type !== "PGY_FAVORITE_TASK_STATUS") return false;
+    const currentUserId = currentXhsUserId();
+    if (message.userId && String(message.userId) !== currentUserId) return false;
+    const button = document.getElementById(WRITE_BUTTON_ID);
+    if (!button) return false;
+    const label = button.querySelector("strong");
+    if (message.status === "running") {
+      button.disabled = true;
+      label.textContent = "写入中...";
+    } else if (message.status === "completed") {
+      button.disabled = false;
+      button.classList.add("is-saved");
+      label.textContent = "已写入飞书";
+    } else if (message.status === "failed") {
+      button.disabled = false;
+      button.classList.remove("is-saved");
+      button.title = message.message || "写入飞书失败";
+      label.textContent = "写入失败";
+    }
+    sendResponse({ ok: true });
+    return false;
+  });
 
   window.addEventListener("resize", scheduleRender);
   startObserver();

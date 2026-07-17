@@ -4706,23 +4706,27 @@ function preFavoriteCategoryTags(...profiles) {
   return tags.slice(0, 30);
 }
 
-function preFavoritePatchFromApiCache(userId, apiCache) {
+function preFavoritePatchFromApiCache(userId, apiCache, { markDataRefreshed = false } = {}) {
   const detailProfile = apiCache?.cache?.blogger_profile || {};
   const listProfile = apiCache?.cache?.blogger_list_profile || {};
   const profile = { ...detailProfile, ...listProfile };
   const detail = mergeDetailApiCache({ pgy_blogger_id: userId }, apiCache);
   const redId = cleanJsonText(firstDefined(profile.redId, profile.red_id, profile.redID, profile.redBookId, profile.redbookId, profile.red_book_id, profile.xiaohongshuId, profile.xiaohongshu_id));
   const categoryTags = preFavoriteCategoryTags(detailProfile, listProfile);
+  const now = new Date().toISOString();
   const patch = {
     userId,
     categoryTags,
     categorySource: "pgy_profile",
     quoteStatus: "报价已获取",
-    quoteFetchedAt: new Date().toISOString(),
-    lastDataRefreshAt: new Date().toISOString(),
+    quoteFetchedAt: now,
     lastRefreshFailedAt: "",
-    updatedAt: new Date().toISOString()
+    updatedAt: now
   };
+  if (markDataRefreshed) {
+    patch.lastDataRefreshAt = now;
+    patch.dataRefreshSource = "manual";
+  }
   const name = cleanJsonText(firstDefined(profile.name, profile.nickName, profile.nickname));
   if (name) patch.name = name;
   const avatar = cleanJsonText(firstDefined(profile.headPhoto, profile.avatar, profile.avatarUrl, profile.headImage));
@@ -4813,7 +4817,13 @@ async function enrichPreFavoriteQuote({ userId }) {
   if (!hasPreFavoriteProfileData(patch)) throw new Error("蒲公英未返回有效达人数据，请确认已登录后重试。");
   const stored = await chrome.storage.local.get({ pgyPreFavorites: [] });
   const favorites = Array.isArray(stored.pgyPreFavorites) ? stored.pgyPreFavorites : [];
-  const next = favorites.map((item) => item?.userId === cleanUserId ? { ...item, ...patch } : item);
+  const next = favorites.map((item) => item?.userId === cleanUserId
+    ? {
+        ...item,
+        ...patch,
+        dataRefreshSource: item?.dataRefreshSource || (item?.lastDataRefreshAt ? "" : "quote_enrichment")
+      }
+    : item);
   await chrome.storage.local.set({ pgyPreFavorites: next });
   return { ok: true, patch };
 }
@@ -4856,7 +4866,7 @@ async function refreshAllPreFavorites({ userIds = [] } = {}) {
       try {
         const apiCache = await fetchFastDetailApiCacheFromTab(tab.id, userId);
         if (!apiCache?.ok) throw new Error(apiCache?.message || "蒲公英接口未返回达人数据");
-        const patch = preFavoritePatchFromApiCache(userId, apiCache);
+        const patch = preFavoritePatchFromApiCache(userId, apiCache, { markDataRefreshed: true });
         if (!hasPreFavoriteProfileData(patch)) throw new Error("蒲公英未返回有效达人数据，请确认已登录后重试");
         favorites = favorites.map((item) => cleanPgyUserId(item?.userId) === userId ? { ...item, ...patch } : item);
         completed += 1;

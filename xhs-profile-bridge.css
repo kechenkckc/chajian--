@@ -63,6 +63,21 @@
   opacity: 0.72;
 }
 
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-write {
+  color: #d91f43;
+  border-color: rgba(255, 36, 72, 0.28);
+  background: #fff;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-write span {
+  background: #ff2448;
+}
+
+#pgy-xhs-profile-bridge-bar .pgy-xhs-profile-write.is-saved {
+  color: #a31632;
+  background: #fff3f5;
+}
+
 #pgy-xhs-profile-bridge-bar .pgy-xhs-profile-favorite.is-saved {
   color: #8a4b10;
   border-color: rgba(180, 112, 32, 0.28);

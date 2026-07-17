@@ -683,6 +683,7 @@ function normalizeFavorites(items) {
       updatedAt: String(item?.updatedAt || "").trim(),
       quoteFetchedAt: String(item?.quoteFetchedAt || "").trim(),
       lastDataRefreshAt: String(item?.lastDataRefreshAt || item?.quoteFetchedAt || "").trim(),
+      dataRefreshSource: String(item?.dataRefreshSource || "").trim(),
       lastRefreshFailedAt: String(item?.lastRefreshFailedAt || "").trim(),
       feishuWriteHistory: normalizeWriteHistory(item?.feishuWriteHistory, String(item?.status || "").trim())
       };
@@ -823,7 +824,7 @@ function costMetricText(value) {
 
 function ratingDisplayText(rating) {
   if (!rating || !Number.isFinite(rating.value)) return "未评分";
-  if ((rating.display || ratingDisplaySelect.value) === "score") return `${rating.value}/5 分`;
+  if (ratingDisplaySelect.value === "score") return `${rating.value}/5 分`;
   const fullStars = Math.max(0, Math.min(5, Math.floor(rating.value)));
   return `${"★".repeat(fullStars)}${"☆".repeat(5 - fullStars)} · ${rating.value}/5`;
 }
@@ -1349,7 +1350,29 @@ async function importOnlineTable() {
 }
 
 function needsDataRefresh(item) {
-  return !String(item?.lastDataRefreshAt || item?.quoteFetchedAt || "").trim();
+  return !dataRefreshTimestamp(item);
+}
+
+function timestampsAreClose(left, right, toleranceMs) {
+  const leftTime = Date.parse(left || "");
+  const rightTime = Date.parse(right || "");
+  return Number.isFinite(leftTime) && Number.isFinite(rightTime) && Math.abs(leftTime - rightTime) <= toleranceMs;
+}
+
+function isLegacyInitialQuoteEnrichment(item) {
+  if (String(item?.dataRefreshSource || "").trim()) return false;
+  const refreshedAt = String(item?.lastDataRefreshAt || "").trim();
+  const quoteFetchedAt = String(item?.quoteFetchedAt || "").trim();
+  const createdAt = String(item?.createdAt || "").trim();
+  if (!refreshedAt || !quoteFetchedAt || !createdAt) return false;
+  return timestampsAreClose(refreshedAt, quoteFetchedAt, 5000)
+    && timestampsAreClose(refreshedAt, createdAt, 10 * 60 * 1000);
+}
+
+function dataRefreshTimestamp(item) {
+  const refreshSource = String(item?.dataRefreshSource || "").trim();
+  if (refreshSource === "quote_enrichment" || isLegacyInitialQuoteEnrichment(item)) return "";
+  return String(item?.lastDataRefreshAt || "").trim();
 }
 
 async function refreshFavorites(targets, label) {
@@ -1494,7 +1517,7 @@ function renderFavorites() {
         ${latestNoteUrl || latestNoteId || item.latestCooperationNoteSourceUrl ? `<button type="button" data-action="open-latest-note">查看笔记</button>` : ""}
       </div>
     ` : "";
-    const dataRefreshAt = item.lastDataRefreshAt || item.quoteFetchedAt || "";
+    const dataRefreshAt = dataRefreshTimestamp(item);
     const dataStatusHtml = dataRefreshAt
       ? `<span class="data-status is-updated">数据已更新 · ${escapeHtml(formatTime(dataRefreshAt))}</span>`
       : `<span class="data-status is-pending">数据未更新</span>`;
