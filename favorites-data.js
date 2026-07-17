@@ -14,6 +14,10 @@ const FavoriteDataTools = (() => {
     cooperationInteractionMedian: ["合作互动中位数", "互动中位数（合作）", "合作互动", "cooperationInteractionMedian"],
     cooperationCount: ["合作次数", "历史合作次数", "达人合作次数", "跨子表合作次数", "cooperationCount", "cooperation_count"],
     cooperationNoteCount: ["合作笔记数", "已合作笔记数", "cooperationNoteCount"],
+    latestCooperationNoteId: ["最新合作笔记ID", "合作笔记ID", "笔记ID", "noteId", "latestCooperationNoteId", "latest_note_id"],
+    latestCooperationNoteTitle: ["最新合作笔记标题", "合作笔记标题", "笔记标题", "latestCooperationNoteTitle", "latest_note_title"],
+    latestCooperationNotePublishedAt: ["发布时间", "笔记发布时间", "合作笔记发布时间", "最新合作笔记发布时间", "最新笔记发布时间", "latestCooperationNotePublishedAt", "latest_note_published_at"],
+    latestCooperationNoteUrl: ["发布链接", "笔记发布链接", "合作笔记发布链接", "最新合作笔记发布链接", "最新笔记链接", "小红书笔记链接", "latestCooperationNoteUrl", "latest_note_url"],
     cpmText: ["CPM", "合作CPM", "cpm", "cpmText"],
     cpeText: ["CPE", "合作CPE", "cpe", "cpeText"],
     bio: ["个人简介", "简介", "博主人设", "bio"],
@@ -192,6 +196,10 @@ const FavoriteDataTools = (() => {
     return "";
   }
 
+  function hasField(values, field) {
+    return FIELD_ALIASES[field].some((alias) => values.has(normalizeHeader(alias)));
+  }
+
   function cleanUserId(value, pgyUrl, xhsUrl) {
     const direct = String(value || "").trim().replace(/^pgy-api:/i, "");
     if (direct) return direct;
@@ -238,6 +246,10 @@ const FavoriteDataTools = (() => {
       const value = pick(values, field);
       if (value) record[field] = value;
     }
+    for (const field of ["latestCooperationNoteId", "latestCooperationNoteTitle", "latestCooperationNotePublishedAt", "latestCooperationNoteUrl"]) {
+      if (hasField(values, field)) record[field] = pick(values, field);
+    }
+    if (hasField(values, "latestCooperationNoteUrl")) record.latestCooperationNoteSourceUrl = pick(values, "latestCooperationNoteUrl");
     const customTagColumn = String(options.customTagColumn || "").trim();
     const customTagTexts = customTagColumn
       ? [values.get(normalizeHeader(customTagColumn)) || ""]
@@ -282,6 +294,9 @@ const FavoriteDataTools = (() => {
         continue;
       }
       const patch = Object.fromEntries(Object.entries(record).filter(([, value]) => value !== "" && value !== null && value !== undefined));
+      for (const field of ["latestCooperationNoteId", "latestCooperationNoteTitle", "latestCooperationNotePublishedAt", "latestCooperationNoteSourceUrl", "latestCooperationNoteUrl"]) {
+        if (Object.prototype.hasOwnProperty.call(record, field)) patch[field] = record[field];
+      }
       delete patch.categoryTags;
       delete patch.categorySource;
       if (record.customTags?.length) {
@@ -332,6 +347,8 @@ const FavoriteDataTools = (() => {
       "合作互动中位数": item.cooperationInteractionMedian || "",
       "合作次数": item.cooperationCount || "",
       "合作笔记数": item.cooperationNoteCount || "",
+      "发布时间": item.latestCooperationNotePublishedAt || "",
+      "发布链接": item.latestCooperationNoteUrl || "",
       "CPM": item.cpmText || item.cpm || "",
       "CPE": item.cpeText || item.cpe || "",
       "内容类目": (item.categoryTags || []).join("、"),

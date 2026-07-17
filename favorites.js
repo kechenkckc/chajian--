@@ -10,7 +10,9 @@ const refreshBtn = document.getElementById("refreshBtn");
 const clearBtn = document.getElementById("clearBtn");
 const selectAll = document.getElementById("selectAll");
 const selectedCount = document.getElementById("selectedCount");
-const batchRemoveBtn = document.getElementById("batchRemoveBtn");
+const writePanel = document.getElementById("writePanel");
+const closeWritePanelBtn = document.getElementById("closeWritePanelBtn");
+const openWritePanelBtn = document.getElementById("openWritePanelBtn");
 const writeFeishuBtn = document.getElementById("writeFeishuBtn");
 const favoriteConfiguredTable = document.getElementById("favoriteConfiguredTable");
 const activeWriteTarget = document.getElementById("activeWriteTarget");
@@ -20,6 +22,9 @@ const manageFeishuConfigsBtn = document.getElementById("manageFeishuConfigsBtn")
 const searchInput = document.getElementById("searchInput");
 const statusFilter = document.getElementById("statusFilter");
 const acquisitionFilter = document.getElementById("acquisitionFilter");
+const latestNoteFilter = document.getElementById("latestNoteFilter");
+const quickStatusFilter = document.getElementById("quickStatusFilter");
+const quickAcquisitionFilter = document.getElementById("quickAcquisitionFilter");
 const categoryFilters = document.getElementById("categoryFilters");
 const tagFilters = document.getElementById("tagFilters");
 const priceTypeFilter = document.getElementById("priceTypeFilter");
@@ -45,14 +50,15 @@ const cpeMin = document.getElementById("cpeMin");
 const cpeMax = document.getElementById("cpeMax");
 const customTagInput = document.getElementById("customTagInput");
 const customTagSuggestions = document.getElementById("customTagSuggestions");
+const selectUntaggedBtn = document.getElementById("selectUntaggedBtn");
 const addTagBtn = document.getElementById("addTagBtn");
-const removeTagBtn = document.getElementById("removeTagBtn");
 const tagLibraryChips = document.getElementById("tagLibraryChips");
+const TAG_LIBRARY_VISIBLE_LIMIT = 12;
 const exportBtn = document.getElementById("exportBtn");
 const importFile = document.getElementById("importFile");
 const ratingColumnInput = document.getElementById("ratingColumnInput");
 const ratingDisplaySelect = document.getElementById("ratingDisplaySelect");
-const customColumnsInput = document.getElementById("customColumnsInput");
+const customColumnInputs = Array.from(document.querySelectorAll("[data-custom-column-input]"));
 const updatePendingBtn = document.getElementById("updatePendingBtn");
 const updateAllBtn = document.getElementById("updateAllBtn");
 const onlineTableUrl = document.getElementById("onlineTableUrl");
@@ -131,6 +137,23 @@ function normalizeCustomColumnNames(value) {
   return Array.from(new Set(source.map((item) => String(item || "").trim()).filter(Boolean))).slice(0, 30);
 }
 
+function configuredCustomColumnNames() {
+  return normalizeCustomColumnNames(customColumnInputs.map((input) => input.value)).slice(0, 3);
+}
+
+function hasCustomFieldValue(value) {
+  return value !== null && value !== undefined && String(value).trim() !== "";
+}
+
+function normalizeCustomFields(item) {
+  const configuredFields = Object.fromEntries(configuredCustomColumnNames()
+    .filter((fieldName) => hasCustomFieldValue(item?.[fieldName]))
+    .map((fieldName) => [fieldName, item[fieldName]]));
+  return Object.fromEntries(Object.entries({ ...configuredFields, ...(item?.customFields || {}) })
+    .map(([key, value]) => [String(key || "").trim(), String(value ?? "").trim()])
+    .filter(([key, value]) => key && hasCustomFieldValue(value)));
+}
+
 function normalizeRating(value, fallbackDisplay = "stars", fallbackColumn = "达人评分") {
   const rawValue = typeof value === "object" && value !== null ? value.value : value;
   const number = Number(rawValue);
@@ -147,7 +170,7 @@ function importFieldOptions() {
   return {
     ratingColumn: String(ratingColumnInput.value || "").trim(),
     ratingDisplay: ratingDisplaySelect.value === "score" ? "score" : "stars",
-    customColumns: normalizeCustomColumnNames(customColumnsInput.value)
+    customColumns: configuredCustomColumnNames()
   };
 }
 
@@ -235,6 +258,42 @@ function normalizeAcquisitionSources(value, legacySource = "") {
   return sources.filter((entry, index) => sources.findIndex((candidate) => candidate.key === entry.key) === index);
 }
 
+function acquisitionSourceDirectUrl(entry) {
+  const key = String(entry?.key || "").trim();
+  const url = String(entry?.url || "").trim();
+  if (!key.startsWith("online:") || !url) return "";
+  try {
+    const target = new URL(url);
+    const resourceId = String(entry?.resourceId || "").trim();
+    const sourceType = String(entry?.type || "").trim();
+    const isFeishu = target.hostname.endsWith("feishu.cn") || target.hostname.endsWith("larksuite.com");
+    if (!isFeishu || !resourceId) return target.toString();
+
+    const pathParts = target.pathname.split("/").filter(Boolean);
+    const isBitable = /多维表格|bitable|base/i.test(sourceType) || pathParts.includes("base");
+    const isSpreadsheet = /电子表格|spreadsheet|sheet/i.test(sourceType) || pathParts.includes("sheets") || pathParts.includes("sheet");
+    if (isBitable) {
+      target.searchParams.delete("table_id");
+      target.searchParams.set("table", resourceId);
+    } else if (isSpreadsheet) {
+      target.searchParams.delete("sheet_id");
+      target.searchParams.set("sheet", resourceId);
+    }
+    return target.toString();
+  } catch {
+    return "";
+  }
+}
+
+function acquisitionSourceHtml(entry) {
+  const label = String(entry?.label || "未知渠道").trim();
+  const directUrl = acquisitionSourceDirectUrl(entry);
+  const timeText = entry?.acquiredAt ? ` · ${formatTime(entry.acquiredAt)}` : "";
+  const title = `${label}${timeText}${directUrl ? " · 点击直达子表" : ""}`;
+  if (!directUrl) return `<span class="write-history-item" title="${escapeHtml(title)}">${escapeHtml(label)}</span>`;
+  return `<a class="write-history-item is-link" href="${escapeHtml(directUrl)}" target="_blank" rel="noopener noreferrer" title="${escapeHtml(title)}" aria-label="直达 ${escapeHtml(label)}"><span>${escapeHtml(label)}</span></a>`;
+}
+
 function cooperationCountFromAcquisitionSources(value) {
   const childKeys = new Set();
   for (const entry of Array.isArray(value) ? value : []) {
@@ -252,6 +311,14 @@ function needsCooperationCountMigration(items) {
     String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim() === ""
     && cooperationCountFromAcquisitionSources(item?.acquisitionSources)
   ));
+}
+
+function syncSelectOptions(source, target) {
+  const previous = source.value;
+  target.textContent = "";
+  Array.from(source.options).forEach((option) => target.append(option.cloneNode(true)));
+  target.value = previous;
+  target.disabled = source.disabled;
 }
 
 function renderFeishuStatusOptions() {
@@ -280,6 +347,8 @@ function renderFeishuStatusOptions() {
     statusFilter.append(option);
   }
   statusFilter.value = Array.from(statusFilter.options).some((option) => option.value === previous) ? previous : "";
+  syncSelectOptions(statusFilter, quickStatusFilter);
+  if (quickStatusFilter.options[0]) quickStatusFilter.options[0].textContent = "全部状态";
 }
 
 function renderAcquisitionOptions() {
@@ -306,6 +375,7 @@ function renderAcquisitionOptions() {
       acquisitionFilter.append(option);
     });
   acquisitionFilter.value = Array.from(acquisitionFilter.options).some((option) => option.value === previous) ? previous : "";
+  syncSelectOptions(acquisitionFilter, quickAcquisitionFilter);
 }
 
 function activeTableLabel() {
@@ -322,8 +392,26 @@ function updateActiveWriteTarget() {
   activeWriteTarget.textContent = activeTable ? `当前生效：${label}` : "当前生效：暂无可写入表格";
   activeWriteTarget.title = title;
   activeWriteTarget.classList.toggle("is-empty", !activeTable);
-  stickyWriteTarget.textContent = label;
+  stickyWriteTarget.value = activeTable ? configuredTableValue(activeTable) : "";
   stickyWriteTarget.title = title;
+}
+
+function renderConfiguredTableOptions() {
+  [favoriteConfiguredTable, stickyWriteTarget].forEach((select) => {
+    select.textContent = "";
+    const placeholder = document.createElement("option");
+    placeholder.value = "";
+    placeholder.textContent = configuredTables.length ? "请选择已配置表格" : "暂无已配置表格";
+    select.append(placeholder);
+    configuredTables.forEach((config, index) => {
+      const option = document.createElement("option");
+      option.value = configuredTableValue(config);
+      option.textContent = configuredTableLabel(config, index);
+      select.append(option);
+    });
+    select.disabled = configuredTables.length === 0;
+    select.value = activeTable ? configuredTableValue(activeTable) : "";
+  });
 }
 
 async function loadConfiguredTables({ announce = false } = {}) {
@@ -338,19 +426,7 @@ async function loadConfiguredTables({ announce = false } = {}) {
     && (config.sheetId || "") === String(stored.favoriteFeishuSheetId || "").trim()
   ));
   activeTable = configuredTables[previousIndex >= 0 ? previousIndex : 0] || null;
-  favoriteConfiguredTable.textContent = "";
-  const placeholder = document.createElement("option");
-  placeholder.value = "";
-  placeholder.textContent = configuredTables.length ? "请选择已配置表格" : "暂无已配置表格";
-  favoriteConfiguredTable.append(placeholder);
-  configuredTables.forEach((config, index) => {
-    const option = document.createElement("option");
-    option.value = configuredTableValue(config);
-    option.textContent = configuredTableLabel(config, index);
-    favoriteConfiguredTable.append(option);
-  });
-  favoriteConfiguredTable.disabled = configuredTables.length === 0;
-  favoriteConfiguredTable.value = activeTable ? configuredTableValue(activeTable) : "";
+  renderConfiguredTableOptions();
   updateActiveWriteTarget();
   renderFeishuStatusOptions();
   const nextUrl = activeTable?.url || "";
@@ -364,8 +440,10 @@ async function loadConfiguredTables({ announce = false } = {}) {
     : "飞书配置页暂无可用表格，请先添加并保存配置。", !activeTable);
 }
 
-async function applyConfiguredTableSelection() {
-  activeTable = configuredTables.find((config) => configuredTableValue(config) === favoriteConfiguredTable.value) || null;
+async function applyConfiguredTableSelection(source = favoriteConfiguredTable) {
+  activeTable = configuredTables.find((config) => configuredTableValue(config) === source.value) || null;
+  favoriteConfiguredTable.value = activeTable ? configuredTableValue(activeTable) : "";
+  stickyWriteTarget.value = favoriteConfiguredTable.value;
   updateActiveWriteTarget();
   await chrome.storage.local.set({
     favoriteFeishuUrl: activeTable?.url || "",
@@ -409,6 +487,64 @@ function normalizeAvatarUrl(value) {
   const url = String(value || "").trim();
   if (url.startsWith("//")) return `https:${url}`;
   return /^https?:\/\//i.test(url) || /^data:image\//i.test(url) ? url : "";
+}
+
+function normalizeNoteUrl(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  try {
+    const parsed = new URL(text);
+    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+function noteIdFromValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return text;
+    }
+  })();
+  return (decoded.match(/\/(?:explore|discovery\/item)\/([0-9a-f]{24})(?:[/?#]|$)/i) || [])[1]
+    || (decoded.match(/(?:noteId|note_id)=([0-9a-f]{24})(?:[&#]|$)/i) || [])[1]
+    || (/^[0-9a-f]{24}$/i.test(decoded) ? decoded : "");
+}
+
+function hasLatestCooperationNote(item) {
+  return Boolean(
+    String(item?.latestCooperationNoteId || "").trim()
+    || String(item?.latestCooperationNoteTitle || "").trim()
+    || String(item?.latestCooperationNotePublishedAt || "").trim()
+    || String(item?.latestCooperationNoteSourceUrl || "").trim()
+    || String(item?.latestCooperationNoteUrl || "").trim()
+  );
+}
+
+function isResolvedPgyNoteUrl(value) {
+  const url = normalizeNoteUrl(value);
+  return Boolean(url && /[?&]xsec_token=/i.test(url));
+}
+
+function latestNoteTarget(item) {
+  const sourceUrl = normalizeNoteUrl(item?.latestCooperationNoteSourceUrl)
+    || normalizeNoteUrl(item?.latestCooperationNoteUrl);
+  const noteId = noteIdFromValue(item?.latestCooperationNoteId) || noteIdFromValue(sourceUrl);
+  return {
+    key: String(item?.userId || ""),
+    userId: String(item?.userId || ""),
+    noteId,
+    sourceUrl
+  };
+}
+
+function canResolveLatestNoteLink(item) {
+  const target = latestNoteTarget(item);
+  return Boolean(target.noteId || target.sourceUrl);
 }
 
 function avatarInitial(name) {
@@ -519,6 +655,16 @@ function normalizeFavorites(items) {
       cooperationInteractionMedian: String(item?.cooperationInteractionMedian ?? "").trim(),
       cooperationCount: storedCooperationCount || cooperationCountFromAcquisitionSources(acquisitionSources),
       cooperationNoteCount: String(item?.cooperationNoteCount ?? "").trim(),
+      latestCooperationNoteId: noteIdFromValue(item?.latestCooperationNoteId)
+        || noteIdFromValue(item?.latestCooperationNoteSourceUrl)
+        || noteIdFromValue(item?.latestCooperationNoteUrl),
+      latestCooperationNoteTitle: String(item?.latestCooperationNoteTitle || "").trim(),
+      latestCooperationNotePublishedAt: String(item?.latestCooperationNotePublishedAt || "").trim(),
+      latestCooperationNoteSourceUrl: normalizeNoteUrl(item?.latestCooperationNoteSourceUrl)
+        || normalizeNoteUrl(item?.latestCooperationNoteUrl),
+      latestCooperationNoteUrl: normalizeNoteUrl(item?.latestCooperationNoteUrl),
+      latestCooperationNoteLinkFetchedAt: String(item?.latestCooperationNoteLinkFetchedAt || "").trim(),
+      latestCooperationNoteLinkError: String(item?.latestCooperationNoteLinkError || "").trim(),
       cpmText: String(item?.cpmText ?? item?.cpm ?? item?.CPM ?? "").trim(),
       cpeText: String(item?.cpeText ?? item?.cpe ?? item?.CPE ?? "").trim(),
       quoteStatus: String(item?.quoteStatus || "").trim(),
@@ -526,9 +672,7 @@ function normalizeFavorites(items) {
       categoryTags: officialCategoryTags,
       customTags: normalizeTagList([...normalizeTagList(item?.customTags), ...migratedCustomTags]),
       rating: normalizeRating(item?.rating),
-      customFields: Object.fromEntries(Object.entries(item?.customFields || {})
-        .map(([key, value]) => [String(key || "").trim(), String(value ?? "").trim()])
-        .filter(([key, value]) => key && value)),
+      customFields: normalizeCustomFields(item),
       categorySource: officialCategoryTags.length ? categorySource : "",
       source: String(item?.source || "").trim(),
       acquisitionSources,
@@ -564,6 +708,9 @@ function favoriteSearchText(item) {
     item.quoteStatus,
     item.bio,
     item.status,
+    item.latestCooperationNoteId,
+    item.latestCooperationNoteTitle,
+    item.latestCooperationNotePublishedAt,
     ...(item.acquisitionSources || []).map((entry) => entry.label),
     ...(item.feishuWriteHistory || []).map((entry) => entry.label),
     ...(item.categoryTags || []),
@@ -602,10 +749,12 @@ function cooperationMetricValues(item) {
 }
 
 function sortableMetricValues(item) {
+  const notePublishedAt = Date.parse(String(item?.latestCooperationNotePublishedAt || "").trim());
   return {
     followers: parsePriceValue(item.followersText),
     picturePrice: parsePriceValue(item.picturePriceText),
     videoPrice: parsePriceValue(item.videoPriceText),
+    notePublishedAt: Number.isFinite(notePublishedAt) ? notePublishedAt : null,
     ...cooperationMetricValues(item)
   };
 }
@@ -641,7 +790,7 @@ function matchesCustomDataFilters(item) {
   for (const [fieldName, keyword] of customFieldFilterValues) {
     const query = String(keyword || "").trim().toLowerCase();
     if (!query) continue;
-    const value = String(item.customFields?.[fieldName] || "").toLowerCase();
+    const value = String(item.customFields?.[fieldName] ?? "").toLowerCase();
     if (!value.includes(query)) return false;
   }
   return true;
@@ -702,11 +851,14 @@ function matchesFavoriteFilters(item, { ignoreCategory = false, ignoreTag = fals
   const keyword = String(searchInput.value || "").trim().toLowerCase();
   const status = statusFilter.value;
   const acquisition = acquisitionFilter.value;
+  const latestNote = latestNoteFilter.value;
   const writeHistory = item.feishuWriteHistory || [];
   if (status === "never" && writeHistory.length) return false;
   if (status === "any" && !writeHistory.length) return false;
   if (status.startsWith("table:") && !writeHistory.some((entry) => entry.key === status.slice(6))) return false;
   if (acquisition && !(item.acquisitionSources || []).some((entry) => entry.key === acquisition)) return false;
+  if (latestNote === "has" && !hasLatestCooperationNote(item)) return false;
+  if (latestNote === "none" && hasLatestCooperationNote(item)) return false;
   if (!ignoreCategory) {
     if (activeCategory === "未识别官方类目" && (item.categoryTags || []).length) return false;
     if (activeCategory && activeCategory !== "未识别官方类目" && !(item.categoryTags || []).includes(activeCategory)) return false;
@@ -790,14 +942,25 @@ function renderTagFilters() {
   customTagSuggestions.innerHTML = tagLibrary
     .map((tag) => `<option value="${escapeHtml(tag)}"></option>`)
     .join("");
-  tagLibraryChips.innerHTML = tagLibrary.length
-    ? `<span>已有标签，点击添加：</span>${tagLibrary.map((tag) => `<button type="button" data-library-tag="${escapeHtml(tag)}">+ ${escapeHtml(tag)}</button>`).join("")}`
-    : `<span>新增标签后会保存在这里，可继续分配给其他博主。</span>`;
+  if (!tagLibrary.length) {
+    tagLibraryChips.innerHTML = `<span>首次输入标签后，会作为快捷选项保存在这里。</span>`;
+    return;
+  }
+  const visibleLibraryTags = tagLibrary.slice(0, TAG_LIBRARY_VISIBLE_LIMIT);
+  const hiddenLibraryTags = tagLibrary.slice(TAG_LIBRARY_VISIBLE_LIMIT);
+  const libraryTagButton = (tag) => `<button type="button" data-library-tag="${escapeHtml(tag)}">+ ${escapeHtml(tag)}</button>`;
+  tagLibraryChips.innerHTML = [
+    `<span>常用标签，点击快速打标：</span>`,
+    ...visibleLibraryTags.map(libraryTagButton),
+    hiddenLibraryTags.length
+      ? `<details class="facet-more tag-library-more"><summary>其余标签 ${hiddenLibraryTags.length}</summary><div>${hiddenLibraryTags.map(libraryTagButton).join("")}</div></details>`
+      : ""
+  ].join("");
 }
 
 function availableCustomFieldNames() {
   return Array.from(new Set([
-    ...normalizeCustomColumnNames(customColumnsInput.value),
+    ...configuredCustomColumnNames(),
     ...favorites.flatMap((item) => Object.keys(item.customFields || {})),
     ...customFieldFilterValues.keys()
   ])).sort((left, right) => left.localeCompare(right, "zh-CN"));
@@ -825,6 +988,7 @@ function renderActiveFilters() {
   if (keyword) chips.push({ key: "search", label: `搜索：${keyword}` });
   if (statusFilter.value) chips.push({ key: "status", label: statusFilter.selectedOptions[0]?.textContent || "飞书状态" });
   if (acquisitionFilter.value) chips.push({ key: "acquisition", label: `获取：${acquisitionFilter.selectedOptions[0]?.textContent || "已选择渠道"}` });
+  if (latestNoteFilter.value) chips.push({ key: "latest-note", label: latestNoteFilter.selectedOptions[0]?.textContent || "最新合作笔记" });
   const priceParts = [];
   if (priceTypeFilter.value !== "any") priceParts.push(priceTypeFilter.selectedOptions[0]?.textContent || "报价类型");
   if (priceMinInput.value) priceParts.push(`≥ ${priceMinInput.value}`);
@@ -874,6 +1038,7 @@ function clearFilter(key) {
   if (key === "search") searchInput.value = "";
   else if (key === "status") statusFilter.value = "";
   else if (key === "acquisition") acquisitionFilter.value = "";
+  else if (key === "latest-note") latestNoteFilter.value = "";
   else if (key === "price") {
     priceTypeFilter.value = "any";
     priceMinInput.value = "";
@@ -899,6 +1064,7 @@ function clearAllFilters() {
   searchInput.value = "";
   statusFilter.value = "";
   acquisitionFilter.value = "";
+  latestNoteFilter.value = "";
   priceTypeFilter.value = "any";
   priceMinInput.value = "";
   priceMaxInput.value = "";
@@ -920,13 +1086,13 @@ function updateSelectionState() {
   const visible = filteredFavorites();
   const visibleIds = visible.map((item) => item.userId);
   const visibleSelected = visibleIds.filter((userId) => selectedUserIds.has(userId)).length;
+  const visibleUntagged = visible.filter((item) => !(item.customTags || []).length);
   const selected = selectedUserIds.size;
   selectedCount.textContent = `已选 ${selected} 位`;
-  batchRemoveBtn.disabled = writing || dataBusy || visible.length === 0;
-  batchRemoveBtn.textContent = visible.length ? `批量移除筛选结果（${visible.length}）` : "批量移除筛选结果";
   writeFeishuBtn.disabled = writing || selected === 0 || !activeTable;
+  selectUntaggedBtn.disabled = writing || dataBusy || visibleUntagged.length === 0;
+  selectUntaggedBtn.textContent = visibleUntagged.length ? `选择无标签达人（${visibleUntagged.length}）` : "暂无无标签达人";
   addTagBtn.disabled = writing || dataBusy || selected === 0;
-  removeTagBtn.disabled = writing || dataBusy || selected === 0;
   customTagInput.disabled = writing || dataBusy;
   tagLibraryChips.querySelectorAll("button").forEach((button) => {
     button.disabled = writing || dataBusy || selected === 0;
@@ -939,7 +1105,7 @@ function updateSelectionState() {
   importFile.disabled = dataBusy;
   ratingColumnInput.disabled = dataBusy;
   ratingDisplaySelect.disabled = dataBusy;
-  customColumnsInput.disabled = dataBusy;
+  customColumnInputs.forEach((input) => { input.disabled = dataBusy; });
   onlineTableUrl.disabled = dataBusy;
   loadOnlineSheetsBtn.disabled = dataBusy;
   onlineTagColumn.disabled = dataBusy;
@@ -971,12 +1137,80 @@ function hideDataProgress() {
   dataProgressBar.value = 0;
 }
 
+async function refreshLatestNoteLinks(targets, { announce = false } = {}) {
+  const targetItems = (Array.isArray(targets) ? targets : [])
+    .filter((item) => item?.userId && canResolveLatestNoteLink(item));
+  if (!targetItems.length) return { total: 0, completed: 0, failed: 0, results: [] };
+  const result = await chrome.runtime.sendMessage({
+    type: "RESOLVE_PGY_NOTE_LINKS",
+    notes: targetItems.map(latestNoteTarget)
+  });
+  if (!result?.ok) throw new Error(result?.message || "最新合作笔记链接获取失败");
+  const resolvedByUserId = new Map((Array.isArray(result.results) ? result.results : [])
+    .map((item) => [String(item?.userId || item?.key || ""), item]));
+  const fetchedAt = new Date().toISOString();
+  const nextFavorites = favorites.map((item) => {
+    const resolved = resolvedByUserId.get(item.userId);
+    if (!resolved) return item;
+    if (!resolved.ok) {
+      return {
+        ...item,
+        latestCooperationNoteId: item.latestCooperationNoteId || resolved.noteId || "",
+        latestCooperationNoteLinkError: String(resolved.message || "获取笔记链接失败")
+      };
+    }
+    return {
+      ...item,
+      latestCooperationNoteId: resolved.noteId || item.latestCooperationNoteId || "",
+      latestCooperationNoteTitle: resolved.title || item.latestCooperationNoteTitle || "",
+      latestCooperationNotePublishedAt: item.latestCooperationNotePublishedAt || resolved.publishedAt || "",
+      latestCooperationNoteSourceUrl: item.latestCooperationNoteSourceUrl || resolved.sourceUrl || "",
+      latestCooperationNoteUrl: resolved.noteLink || item.latestCooperationNoteUrl || "",
+      latestCooperationNoteLinkFetchedAt: fetchedAt,
+      latestCooperationNoteLinkError: ""
+    };
+  });
+  await saveFavorites(nextFavorites);
+  if (announce) {
+    setStatus(`最新合作笔记链接已刷新：成功 ${result.completed || 0} 条，失败 ${result.failed || 0} 条。`, (result.failed || 0) > 0);
+  }
+  return result;
+}
+
+async function openLatestCooperationNote(userId) {
+  const current = favorites.find((item) => item.userId === userId);
+  if (!current || !hasLatestCooperationNote(current)) throw new Error("该达人没有最新合作笔记。");
+  setStatus(`正在刷新「${current.name || current.userId}」的笔记访问链接...`);
+  let noteUrl = "";
+  try {
+    const result = await refreshLatestNoteLinks([current]);
+    const resolved = (result.results || []).find((item) => String(item?.userId || item?.key || "") === userId);
+    noteUrl = normalizeNoteUrl(resolved?.noteLink);
+  } catch (error) {
+    noteUrl = isResolvedPgyNoteUrl(current.latestCooperationNoteUrl) ? normalizeNoteUrl(current.latestCooperationNoteUrl) : "";
+    if (!noteUrl) throw error;
+  }
+  if (!noteUrl) throw new Error("蒲公英未返回可访问的笔记链接，请确认登录状态后重试。");
+  await chrome.tabs.create({ url: noteUrl });
+  setStatus(`已打开「${current.latestCooperationNoteTitle || current.name || "最新合作笔记"}」。`);
+}
+
 async function importFavoriteObjects(rows, sourceLabel, options = {}) {
   const imported = FavoriteDataTools.objectsToFavorites(rows, options);
   if (!imported.length) throw new Error("表格中没有识别到达人 ID，请检查“达人ID / 博主ID / 蒲公英主页”列。");
   const result = FavoriteDataTools.mergeFavorites(favorites, imported);
   await saveFavorites(result.items);
-  setStatus(`${sourceLabel}完成：新增 ${result.added} 位，更新 ${result.updated} 位，共识别 ${imported.length} 位达人。`);
+  const importedIds = new Set(imported.map((item) => item.userId));
+  const noteTargets = favorites.filter((item) => importedIds.has(item.userId) && canResolveLatestNoteLink(item));
+  let noteResult = { completed: 0, failed: 0 };
+  if (noteTargets.length) {
+    showDataProgress(`正在获取 ${noteTargets.length} 条最新合作笔记的可访问链接...`, 0, noteTargets.length);
+    noteResult = await refreshLatestNoteLinks(noteTargets);
+  }
+  const noteSummary = noteTargets.length
+    ? `；笔记链接成功 ${noteResult.completed || 0} 条${noteResult.failed ? `，失败 ${noteResult.failed} 条` : ""}`
+    : "";
+  setStatus(`${sourceLabel}完成：新增 ${result.added} 位，更新 ${result.updated} 位，共识别 ${imported.length} 位达人${noteSummary}。`, (noteResult.failed || 0) > 0);
   return result;
 }
 
@@ -1131,7 +1365,13 @@ async function refreshFavorites(targets, label) {
     });
     if (!result?.ok) throw new Error(result?.message || "达人信息更新失败");
     await loadFavorites();
-    setStatus(`${label}完成：成功 ${result.completed} 位，失败 ${result.failed} 位。${result.failed ? "失败达人已保留原数据并标记原因。" : ""}`, result.failed > 0);
+    const refreshedIds = new Set(targetItems.map((item) => item.userId));
+    const noteTargets = favorites.filter((item) => refreshedIds.has(item.userId) && canResolveLatestNoteLink(item));
+    const noteResult = noteTargets.length ? await refreshLatestNoteLinks(noteTargets) : { completed: 0, failed: 0 };
+    const noteSummary = noteTargets.length
+      ? `；笔记链接成功 ${noteResult.completed || 0} 条${noteResult.failed ? `，失败 ${noteResult.failed} 条` : ""}`
+      : "";
+    setStatus(`${label}完成：达人成功 ${result.completed} 位，失败 ${result.failed} 位${noteSummary}。${result.failed ? "失败达人已保留原数据并标记原因。" : ""}`, result.failed > 0 || noteResult.failed > 0);
   } finally {
     hideDataProgress();
     setDataBusy(false);
@@ -1147,12 +1387,6 @@ async function updatePendingFavorites() {
   const pendingFavorites = favorites.filter(needsDataRefresh);
   if (!pendingFavorites.length) throw new Error("当前没有未更新数据的达人。");
   return refreshFavorites(pendingFavorites, "更新未更新达人");
-}
-
-async function updateFavorite(userId) {
-  const favorite = favorites.find((item) => item.userId === userId);
-  if (!favorite) throw new Error("没有找到该达人。");
-  return refreshFavorites([favorite], `更新「${favorite.name || favorite.userId}」`);
 }
 
 async function loadFavorites() {
@@ -1248,6 +1482,18 @@ function renderFavorites() {
     const customTags = item.customTags || [];
     const performance = cooperationMetricValues(item);
     const quoteStatus = item.quoteStatus || (!item.picturePriceText && !item.videoPriceText ? "报价待补充" : "");
+    const latestNotePublishedAt = String(item.latestCooperationNotePublishedAt || "").trim();
+    const latestNoteUrl = normalizeNoteUrl(item.latestCooperationNoteUrl);
+    const latestNoteTitle = String(item.latestCooperationNoteTitle || "").trim();
+    const latestNoteId = String(item.latestCooperationNoteId || "").trim();
+    const latestNoteHtml = hasLatestCooperationNote(item) ? `
+      <div class="latest-note">
+        <span>最新合作笔记</span>
+        ${latestNoteTitle ? `<strong title="${escapeHtml(latestNoteTitle)}">${escapeHtml(latestNoteTitle)}</strong>` : ""}
+        ${latestNotePublishedAt ? `<small>${escapeHtml(latestNotePublishedAt)}</small>` : ""}
+        ${latestNoteUrl || latestNoteId || item.latestCooperationNoteSourceUrl ? `<button type="button" data-action="open-latest-note">查看笔记</button>` : ""}
+      </div>
+    ` : "";
     const dataRefreshAt = item.lastDataRefreshAt || item.quoteFetchedAt || "";
     const dataStatusHtml = dataRefreshAt
       ? `<span class="data-status is-updated">数据已更新 · ${escapeHtml(formatTime(dataRefreshAt))}</span>`
@@ -1263,10 +1509,10 @@ function renderFavorites() {
     const acquisitionHtml = acquisitionSources.length ? `
       <div class="write-history acquisition-history">
         <span class="write-history-label">获取自</span>
-        ${acquisitionSources.map((entry) => `<span class="write-history-item" title="${escapeHtml(`${entry.label}${entry.acquiredAt ? ` · ${formatTime(entry.acquiredAt)}` : ""}`)}">${escapeHtml(entry.label)}</span>`).join("")}
+        ${acquisitionSources.map(acquisitionSourceHtml).join("")}
       </div>
     ` : "";
-    const customFieldEntries = Object.entries(item.customFields || {}).filter(([, value]) => String(value || "").trim());
+    const customFieldEntries = Object.entries(item.customFields || {}).filter(([, value]) => hasCustomFieldValue(value));
     const cooperationCountNumber = Number(item.cooperationCount);
     const cooperationCountKnown = item.cooperationCount !== "" && Number.isFinite(cooperationCountNumber) && cooperationCountNumber >= 0;
     const cooperationCountText = cooperationCountKnown ? `${Math.round(cooperationCountNumber)} 次` : "待统计";
@@ -1328,7 +1574,7 @@ function renderFavorites() {
           <div class="meta">${dataStatusHtml}<span>${escapeHtml(item.status || "预收藏")} · 入库 ${escapeHtml(formatTime(item.createdAt))}${quoteStatus ? ` · ${escapeHtml(quoteStatus)}` : ""}</span></div>
         </div>
         <div class="card-actions">
-          <button type="button" data-action="update" ${dataBusy ? "disabled" : ""}>更新数据</button>
+          ${latestNoteHtml}
           <button type="button" data-action="edit-tags">编辑标签</button>
           <a class="button" href="${escapeHtml(xhsUrl)}" target="_blank" rel="noopener">小红书主页</a>
           <a class="button primary" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener">蒲公英详情</a>
@@ -1345,20 +1591,6 @@ async function removeFavorite(userId) {
   selectedUserIds.delete(userId);
   await saveFavorites(favorites.filter((item) => item.userId !== userId));
   setStatus("已移除该预收藏达人。");
-}
-
-async function removeFilteredFavorites() {
-  const targets = filteredFavorites();
-  if (!targets.length) return;
-  const targetIds = new Set(targets.map((item) => item.userId));
-  const removingAll = targetIds.size === favorites.length;
-  const message = removingAll
-    ? `当前筛选结果包含全部 ${targetIds.size} 位达人，确定全部移除吗？`
-    : `确定移除当前筛选结果中的 ${targetIds.size} 位达人吗？`;
-  if (!window.confirm(message)) return;
-  targetIds.forEach((userId) => selectedUserIds.delete(userId));
-  await saveFavorites(favorites.filter((item) => !targetIds.has(item.userId)));
-  setStatus(`已批量移除 ${targetIds.size} 位达人。`);
 }
 
 async function clearFavorites() {
@@ -1393,26 +1625,24 @@ function selectedFavorites() {
   return favorites.filter((item) => selectedUserIds.has(item.userId));
 }
 
-async function applyTagsToSelected(mode, providedTags = null) {
+async function applyTagsToSelected(providedTags = null) {
   const tags = normalizeTagList(providedTags || customTagInput.value);
   if (!tags.length) throw new Error("请输入至少一个标签。");
   if (!selectedUserIds.size) throw new Error("请先勾选要分配用户标签的达人。");
   const selected = new Set(selectedUserIds);
-  if (mode !== "remove") tagLibrary = normalizeTagList([...tagLibrary, ...tags], 200);
+  tagLibrary = normalizeTagList([...tagLibrary, ...tags], 200);
   const next = favorites.map((item) => {
     if (!selected.has(item.userId)) return item;
     const current = item.customTags || [];
     return {
       ...item,
-      customTags: mode === "remove"
-        ? current.filter((tag) => !tags.includes(tag))
-        : Array.from(new Set([...current, ...tags])),
+      customTags: Array.from(new Set([...current, ...tags])),
       updatedAt: new Date().toISOString()
     };
   });
   await saveFavorites(next);
   customTagInput.value = "";
-  setStatus(`已为 ${selected.size} 位达人${mode === "remove" ? "移除" : "添加"}用户标签：${tags.join("、")}。`);
+  setStatus(`已为 ${selected.size} 位达人添加标签：${tags.join("、")}。`);
 }
 
 async function editFavoriteTags(userId) {
@@ -1521,6 +1751,8 @@ function favoriteToFeishuRow(item) {
     "阅读中位数（合作）": item.cooperationReadMedian || "",
     "互动中位数（合作）": item.cooperationInteractionMedian || "",
     "已合作笔记数": item.cooperationNoteCount || "",
+    "发布时间": item.latestCooperationNotePublishedAt || "",
+    "发布链接": item.latestCooperationNoteUrl || "",
     "账号类型": (item.categoryTags || []).join("、"),
     "内容类目": (item.categoryTags || []).join("、"),
     "IP城市": item.location || "",
@@ -1625,8 +1857,8 @@ favoriteList.addEventListener("click", (event) => {
     editFavoriteRating(userId).catch((error) => setStatus(error.message, true));
     return;
   }
-  if (button.dataset.action === "update") {
-    updateFavorite(userId).catch((error) => setStatus(error.message, true));
+  if (button.dataset.action === "open-latest-note") {
+    openLatestCooperationNote(userId).catch((error) => setStatus(error.message, true));
     return;
   }
   if (button.dataset.action === "remove") {
@@ -1696,6 +1928,15 @@ selectAll.addEventListener("change", () => {
 searchInput.addEventListener("input", renderFavorites);
 statusFilter.addEventListener("change", renderFavorites);
 acquisitionFilter.addEventListener("change", renderFavorites);
+latestNoteFilter.addEventListener("change", renderFavorites);
+quickStatusFilter.addEventListener("change", () => {
+  statusFilter.value = quickStatusFilter.value;
+  renderFavorites();
+});
+quickAcquisitionFilter.addEventListener("change", () => {
+  acquisitionFilter.value = quickAcquisitionFilter.value;
+  renderFavorites();
+});
 priceTypeFilter.addEventListener("change", renderFavorites);
 priceMinInput.addEventListener("input", renderFavorites);
 priceMaxInput.addEventListener("input", renderFavorites);
@@ -1773,15 +2014,34 @@ tagLibraryChips.addEventListener("click", (event) => {
   if (!button) return;
   const tag = button.dataset.libraryTag || "";
   customTagInput.value = tag;
-  applyTagsToSelected("add", [tag]).catch((error) => setStatus(error.message, true));
+  applyTagsToSelected([tag]).catch((error) => setStatus(error.message, true));
 });
 
-addTagBtn.addEventListener("click", () => applyTagsToSelected("add").catch((error) => setStatus(error.message, true)));
-removeTagBtn.addEventListener("click", () => applyTagsToSelected("remove").catch((error) => setStatus(error.message, true)));
+selectUntaggedBtn.addEventListener("click", () => {
+  const untaggedIds = filteredFavorites()
+    .filter((item) => !(item.customTags || []).length)
+    .map((item) => item.userId);
+  selectedUserIds = new Set(untaggedIds);
+  renderFavorites();
+  setStatus(`已选中当前筛选结果中的 ${untaggedIds.length} 位无标签达人。`);
+});
+
+closeWritePanelBtn.addEventListener("click", () => {
+  writePanel.hidden = true;
+  openWritePanelBtn.hidden = false;
+});
+
+openWritePanelBtn.addEventListener("click", () => {
+  writePanel.hidden = false;
+  openWritePanelBtn.hidden = true;
+  closeWritePanelBtn.focus();
+});
+
+addTagBtn.addEventListener("click", () => applyTagsToSelected().catch((error) => setStatus(error.message, true)));
 customTagInput.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
-  applyTagsToSelected("add").catch((error) => setStatus(error.message, true));
+  applyTagsToSelected().catch((error) => setStatus(error.message, true));
 });
 
 writeFeishuBtn.addEventListener("click", () => syncSelectedToFeishu().catch((error) => {
@@ -1790,6 +2050,7 @@ writeFeishuBtn.addEventListener("click", () => syncSelectedToFeishu().catch((err
   setStatus(error.message, true);
 }));
 favoriteConfiguredTable.addEventListener("change", () => applyConfiguredTableSelection().catch((error) => setStatus(error.message, true)));
+stickyWriteTarget.addEventListener("change", () => applyConfiguredTableSelection(stickyWriteTarget).catch((error) => setStatus(error.message, true)));
 refreshFeishuConfigsBtn.addEventListener("click", () => refreshConfiguredTables().catch((error) => setStatus(error.message, true)));
 manageFeishuConfigsBtn.addEventListener("click", () => openFeishuConfigPage().catch((error) => setStatus(error.message, true)));
 
@@ -1797,7 +2058,6 @@ refreshBtn.addEventListener("click", () => Promise.all([loadFavorites(), loadCon
   .then(() => refreshCooperationCounts({ announce: true }))
   .catch((error) => setStatus(error.message, true)));
 clearBtn.addEventListener("click", () => clearFavorites().catch((error) => setStatus(error.message, true)));
-batchRemoveBtn.addEventListener("click", () => removeFilteredFavorites().catch((error) => setStatus(error.message, true)));
 exportBtn.addEventListener("click", () => exportFavorites().catch((error) => setStatus(error.message, true)));
 importFile.addEventListener("change", () => importFavoriteFile(importFile.files?.[0]).catch((error) => setStatus(error.message, true)));
 ratingColumnInput.addEventListener("change", () => saveImportFieldOptions().catch((error) => setStatus(error.message, true)));
@@ -1806,7 +2066,9 @@ ratingDisplaySelect.addEventListener("change", () => {
     .then(() => saveFavorites(favorites.map((item) => item.rating ? { ...item, rating: { ...item.rating, display: ratingDisplaySelect.value } } : item)))
     .catch((error) => setStatus(error.message, true));
 });
-customColumnsInput.addEventListener("change", () => saveImportFieldOptions().then(renderFavorites).catch((error) => setStatus(error.message, true)));
+customColumnInputs.forEach((input) => input.addEventListener("change", () => {
+  saveImportFieldOptions().then(renderFavorites).catch((error) => setStatus(error.message, true));
+}));
 loadOnlineSheetsBtn.addEventListener("click", () => loadOnlineSheets().catch((error) => setStatus(error.message, true)));
 importOnlineBtn.addEventListener("click", () => importOnlineTable().catch((error) => setStatus(error.message, true)));
 onlineTableUrl.addEventListener("input", resetOnlineSheets);
@@ -1859,7 +2121,9 @@ chrome.storage.local.get({
   const customColumns = stored[CUSTOM_COLUMNS_INITIALIZED_KEY]
     ? savedCustomColumns
     : normalizeCustomColumnNames([...DEFAULT_CUSTOM_COLUMNS, ...savedCustomColumns]);
-  customColumnsInput.value = customColumns.join("、");
+  customColumnInputs.forEach((input, index) => {
+    input.value = customColumns[index] || "";
+  });
   if (!stored[CUSTOM_COLUMNS_INITIALIZED_KEY]) {
     await chrome.storage.local.set({
       favoriteCustomColumns: customColumns,

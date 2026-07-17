@@ -4344,6 +4344,143 @@ async function findPgyContextTab() {
     || null;
 }
 
+function xhsNoteIdFromValue(value) {
+  const text = String(value || "").trim();
+  if (!text) return "";
+  const decoded = (() => {
+    try {
+      return decodeURIComponent(text);
+    } catch {
+      return text;
+    }
+  })();
+  return (decoded.match(/\/(?:explore|discovery\/item)\/([0-9a-f]{24})(?:[/?#]|$)/i) || [])[1]
+    || (decoded.match(/(?:noteId|note_id)=([0-9a-f]{24})(?:[&#]|$)/i) || [])[1]
+    || (/^[0-9a-f]{24}$/i.test(decoded) ? decoded : "");
+}
+
+async function resolveXhsNoteIdFromUrl(value) {
+  const direct = xhsNoteIdFromValue(value);
+  if (direct) return direct;
+  const text = String(value || "").trim();
+  if (!text) return "";
+  let parsed;
+  try {
+    parsed = new URL(text);
+  } catch {
+    return "";
+  }
+  const hostname = parsed.hostname.toLowerCase();
+  if (!hostname.endsWith("xhslink.com") && !hostname.endsWith("xiaohongshu.com")) return "";
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 10000);
+  try {
+    const response = await fetch(parsed.href, {
+      method: "GET",
+      credentials: "omit",
+      redirect: "follow",
+      signal: controller.signal
+    });
+    const fromRedirect = xhsNoteIdFromValue(response.url);
+    if (fromRedirect) return fromRedirect;
+    const body = await response.text().catch(() => "");
+    return xhsNoteIdFromValue(body);
+  } catch {
+    return "";
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function resolvePgyNoteLinks({ notes = [] } = {}) {
+  const incoming = (Array.isArray(notes) ? notes : []).slice(0, 500);
+  const normalized = [];
+  for (let index = 0; index < incoming.length; index += 1) {
+    const item = incoming[index] || {};
+    const sourceUrl = String(item.sourceUrl || item.url || "").trim();
+    const noteId = xhsNoteIdFromValue(item.noteId) || xhsNoteIdFromValue(sourceUrl) || await resolveXhsNoteIdFromUrl(sourceUrl);
+    normalized.push({
+      key: String(item.key || item.userId || index),
+      userId: String(item.userId || "").trim(),
+      noteId,
+      sourceUrl
+    });
+  }
+  const resolvable = normalized.filter((item) => item.noteId);
+  if (!resolvable.length) {
+    return {
+      ok: true,
+      total: normalized.length,
+      completed: 0,
+      failed: normalized.length,
+      results: normalized.map((item) => ({ ...item, ok: false, message: "未识别到笔记 ID" }))
+    };
+  }
+  let tab = await findPgyContextTab();
+  let createdTabId = 0;
+  if (!tab?.id) {
+    tab = await chrome.tabs.create({ url: "https://pgy.xiaohongshu.com/solar/pre-trade/home", active: false });
+    createdTabId = tab.id || 0;
+    if (createdTabId) await waitForTabComplete(createdTabId, 20000).catch(() => null);
+  }
+  if (!tab?.id) throw new Error("无法打开蒲公英页面，请先登录蒲公英。");
+  try {
+    const [injected] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      world: "MAIN",
+      func: async (targets) => {
+        const results = new Array(targets.length);
+        let cursor = 0;
+        async function worker() {
+          while (cursor < targets.length) {
+            const index = cursor;
+            cursor += 1;
+            const target = targets[index];
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 12000);
+              const response = await fetch(`/api/solar/note/${encodeURIComponent(target.noteId)}/detail`, {
+                credentials: "include",
+                signal: controller.signal
+              }).finally(() => clearTimeout(timer));
+              const payload = await response.json().catch(() => null);
+              const data = payload?.data || {};
+              if (!response.ok || payload?.success === false || !data.noteLink) {
+                throw new Error(payload?.msg || `蒲公英接口返回 ${response.status}`);
+              }
+              results[index] = {
+                ...target,
+                ok: true,
+                noteId: String(data.noteId || target.noteId),
+                noteLink: String(data.noteLink || ""),
+                title: String(data.title || ""),
+                publishedAt: String(data.time || data.createTime || "")
+              };
+            } catch (error) {
+              results[index] = { ...target, ok: false, message: String(error?.message || error || "获取笔记链接失败") };
+            }
+          }
+        }
+        await Promise.all(Array.from({ length: Math.min(8, targets.length) }, () => worker()));
+        return results;
+      },
+      args: [resolvable]
+    });
+    const resolved = Array.isArray(injected?.result) ? injected.result : [];
+    const byKey = new Map(resolved.map((item) => [item.key, item]));
+    const results = normalized.map((item) => byKey.get(item.key) || { ...item, ok: false, message: "未识别到笔记 ID" });
+    return {
+      ok: true,
+      total: results.length,
+      completed: results.filter((item) => item.ok).length,
+      failed: results.filter((item) => !item.ok).length,
+      results
+    };
+  } finally {
+    if (createdTabId) chrome.tabs.remove(createdTabId).catch(() => null);
+  }
+}
+
 function fastDetailApiUrls(userId) {
   const encoded = encodeURIComponent(userId);
   const requests = [
@@ -5207,7 +5344,7 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {}, onProgress = a
   return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
 }
 
-async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0, collectionTab = null }) {
+async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 }) {
   rowFromDetailUrl(url);
   detailStopRequested = false;
   const saved = await chrome.storage.local.get({
@@ -5245,7 +5382,7 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0,
   };
   try {
     const result = await favoriteCurrentDetailToFeishu({
-      tab: collectionTab?.id ? collectionTab : { id: -1, url },
+      tab: { id: -1, url },
       options: mergedOptions,
       onProgress: reportProgress
     });
@@ -5288,7 +5425,7 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0,
 
 async function startFavoriteCurrentDetailToFeishu({ tab, options = {} }) {
   if (!tab?.id) throw new Error("无法定位当前达人详情页。");
-  return startFavoriteDetailToFeishu({ url: tab.url || "", options, sourceTabId: tab.id, collectionTab: tab });
+  return startFavoriteDetailToFeishu({ url: tab.url || "", options, sourceTabId: tab.id });
 }
 
 function shouldUseDetailCollection(options = {}) {
@@ -5955,6 +6092,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "REFRESH_ALL_PREFAVORITES") {
       const result = await refreshAllPreFavorites({ userIds: message.userIds || [] });
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "RESOLVE_PGY_NOTE_LINKS") {
+      const result = await resolvePgyNoteLinks({ notes: message.notes || [] });
       sendResponse(result);
       return;
     }

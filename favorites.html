@@ -22,11 +22,15 @@
       </header>
 
       <section class="summary">
-        <div>
+        <div class="summary-count">
           <span>预收藏达人</span>
           <strong id="favoriteCount">0</strong>
         </div>
         <p id="status">从小红书或蒲公英达人主页点击“预收藏”后，会显示在这里。</p>
+        <div class="summary-actions" aria-label="达人信息更新操作">
+          <button id="updatePendingBtn" type="button">更新未更新达人</button>
+          <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
+        </div>
       </section>
 
       <details class="data-panel" aria-labelledby="dataPanelTitle" open>
@@ -39,17 +43,108 @@
           <span class="data-panel-toggle"><b>同步工具</b><i aria-hidden="true"></i></span>
         </summary>
         <div class="data-panel-body">
-          <div class="data-actions">
-            <button id="exportBtn" type="button">导出 Excel</button>
-            <label class="file-button" for="importFile">导入表格</label>
-            <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
-            <button id="updatePendingBtn" type="button">更新未更新达人</button>
-            <button id="updateAllBtn" type="button" class="primary">更新达人信息</button>
+          <section class="data-workflow data-workflow-import" aria-labelledby="importWorkflowTitle">
+            <header class="data-workflow-heading">
+              <span class="data-workflow-index" aria-hidden="true">01</span>
+              <div>
+                <strong id="importWorkflowTitle">导入达人及相关配置</strong>
+                <small>从在线表格或本地文件导入达人数据。</small>
+              </div>
+              <span class="data-workflow-kicker">IMPORT</span>
+            </header>
+            <div class="online-import">
+              <div class="sync-source-row">
+                <section class="sync-source-block online-table-source" aria-labelledby="onlineTableSourceTitle">
+                  <div class="sync-source-heading">
+                    <strong id="onlineTableSourceTitle">在线表格</strong>
+                    <small>读取飞书或公开表格</small>
+                  </div>
+                  <label for="onlineTableUrl">表格地址</label>
+                  <div class="online-import-url-row">
+                    <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
+                    <button id="loadOnlineSheetsBtn" type="button">获取子表</button>
+                  </div>
+                </section>
+                <section class="sync-source-block entity-table-source" aria-labelledby="entityTableSourceTitle">
+                  <div class="sync-source-heading">
+                    <strong id="entityTableSourceTitle">本地表格</strong>
+                    <small>Excel / CSV 文件</small>
+                  </div>
+                  <label class="file-button entity-import-button" for="importFile">选择文件并导入</label>
+                  <input id="importFile" type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" hidden />
+                </section>
+              </div>
+              <div id="onlineSheetPicker" class="online-sheet-picker" hidden>
+                <div class="online-sheet-picker-head">
+                  <label><input id="onlineSheetSelectAll" type="checkbox" /> 全选</label>
+                  <span id="onlineSheetSelectionCount">已选 0 个子表</span>
+                </div>
+                <div id="onlineSheetOptions" class="online-sheet-options"></div>
+                <button id="importOnlineBtn" type="button" class="primary">导入已选子表</button>
+              </div>
+            </div>
+          </section>
+          <section class="data-workflow data-workflow-export" aria-labelledby="exportWorkflowTitle">
+            <header class="data-workflow-heading">
+              <span class="data-workflow-index" aria-hidden="true">02</span>
+              <div>
+                <strong id="exportWorkflowTitle">导出达人及相关配置</strong>
+                <small>导出为 Excel，或选择飞书目标表格用于后续写入。</small>
+              </div>
+              <span class="data-workflow-kicker">EXPORT</span>
+            </header>
+            <div class="export-workflow-body">
+              <section class="export-file-card" aria-labelledby="exportFileTitle">
+                <div>
+                  <span class="config-kicker">LOCAL FILE</span>
+                  <strong id="exportFileTitle">导出 Excel</strong>
+                  <p>将当前达人库完整导出为本地文件。</p>
+                </div>
+                <button id="exportBtn" type="button">导出达人表格</button>
+              </section>
+              <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
+                <div class="feishu-config-copy">
+                  <span class="config-kicker">FEISHU TARGET</span>
+                  <strong id="feishuConfigTitle">飞书写入配置</strong>
+                  <p>选择达人库写入的目标表格，选择后立即生效并自动记住。</p>
+                </div>
+                <div class="feishu-config-control">
+                  <label for="favoriteConfiguredTable">
+                    <span>配置选择</span>
+                    <select id="favoriteConfiguredTable">
+                      <option value="">暂无已配置表格</option>
+                    </select>
+                  </label>
+                  <p id="activeWriteTarget" class="active-write-target is-empty">当前生效：暂无可写入表格</p>
+                </div>
+                <div class="feishu-config-actions">
+                  <button id="refreshFeishuConfigsBtn" type="button">刷新配置</button>
+                  <button id="manageFeishuConfigsBtn" type="button">管理配置</button>
+                </div>
+              </div>
+            </div>
+          </section>
+          <div id="dataProgress" class="data-progress" hidden>
+            <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
+            <progress id="dataProgressBar" max="100" value="0"></progress>
           </div>
+        </div>
+      </details>
+
+      <details class="column-settings-panel" aria-labelledby="columnSettingsTitle" open>
+        <summary class="column-settings-summary">
+          <div class="column-settings-copy">
+            <span class="config-kicker">FIELD MAPPING</span>
+            <strong id="columnSettingsTitle">自定义列名设置</strong>
+            <small>统一管理评分、用户标签及自定义字段对应的表头名称。</small>
+          </div>
+          <span class="column-settings-toggle"><b>列名工具</b><i aria-hidden="true"></i></span>
+        </summary>
+        <div class="column-settings-body">
           <div class="import-field-settings">
             <div class="import-field-heading">
-              <strong>自定义读取字段</strong>
-              <span>导入前填写表格中的原始列名，数据会跟随达人保存、展示、筛选并写入飞书。</span>
+              <strong>评分读取设置</strong>
+              <span>指定评分列名及其展示方式。</span>
             </div>
             <label>
               <span>评分列名</span>
@@ -62,56 +157,21 @@
                 <option value="score">5 分制</option>
               </select>
             </label>
-            <label class="custom-columns-setting">
-              <span>其他读取列</span>
-              <input id="customColumnsInput" type="text" value="返点比例、达人评价、合作备注" placeholder="多个列名用逗号分隔" />
+          </div>
+          <div class="column-name-settings">
+            <label for="onlineTagColumn">
+              <span>用户标签列名</span>
+              <input id="onlineTagColumn" type="text" placeholder="默认识别：达人类型 / 标签 / 达人标签 / 自定义标签" />
             </label>
-          </div>
-          <div class="online-import">
-            <label for="onlineTableUrl">在线表格地址</label>
-            <div class="online-import-url-row">
-              <input id="onlineTableUrl" type="url" placeholder="飞书表格链接，或公开 CSV / Google Sheets 链接" />
-              <button id="loadOnlineSheetsBtn" type="button">获取子表</button>
-            </div>
-            <div class="online-import-settings">
-              <label for="onlineTagColumn">
-                <span>用户标签列名</span>
-                <input id="onlineTagColumn" type="text" placeholder="默认识别：达人类型 / 标签 / 达人标签 / 自定义标签" />
-              </label>
-              <p>填写后，将按该列读取用户在表格中设置的达人类型或标签，并应用到所有选中的子表。</p>
-            </div>
-            <div id="onlineSheetPicker" class="online-sheet-picker" hidden>
-              <div class="online-sheet-picker-head">
-                <label><input id="onlineSheetSelectAll" type="checkbox" /> 全选</label>
-                <span id="onlineSheetSelectionCount">已选 0 个子表</span>
-              </div>
-              <div id="onlineSheetOptions" class="online-sheet-options"></div>
-              <button id="importOnlineBtn" type="button" class="primary">导入已选子表</button>
-            </div>
-          </div>
-          <div class="feishu-config-panel" aria-labelledby="feishuConfigTitle">
-            <div class="feishu-config-copy">
-              <span class="config-kicker">FEISHU TARGET</span>
-              <strong id="feishuConfigTitle">飞书写入配置</strong>
-              <p>选择达人库写入的目标表格，选择后立即生效并自动记住。</p>
-            </div>
-            <div class="feishu-config-control">
-              <label for="favoriteConfiguredTable">
-                <span>配置选择</span>
-                <select id="favoriteConfiguredTable">
-                  <option value="">暂无已配置表格</option>
-                </select>
-              </label>
-              <p id="activeWriteTarget" class="active-write-target is-empty">当前生效：暂无可写入表格</p>
-            </div>
-            <div class="feishu-config-actions">
-              <button id="refreshFeishuConfigsBtn" type="button">刷新配置</button>
-              <button id="manageFeishuConfigsBtn" type="button">管理配置</button>
-            </div>
-          </div>
-          <div id="dataProgress" class="data-progress" hidden>
-            <div><span id="dataProgressLabel">准备中...</span><strong id="dataProgressValue">0%</strong></div>
-            <progress id="dataProgressBar" max="100" value="0"></progress>
+            <label class="custom-columns-setting">
+              <span>自定义列名</span>
+              <span class="custom-columns-inputs">
+                <input type="text" value="返点比例" placeholder="列名 1" aria-label="自定义列名 1" data-custom-column-input />
+                <input type="text" value="达人评价" placeholder="列名 2" aria-label="自定义列名 2" data-custom-column-input />
+                <input type="text" value="合作备注" placeholder="列名 3" aria-label="自定义列名 3" data-custom-column-input />
+              </span>
+            </label>
+            <p>均填写表格中的原始表头；用户标签会用于达人打标，自定义列会跟随达人保存、筛选并写入飞书。</p>
           </div>
         </div>
       </details>
@@ -145,6 +205,14 @@
               <option value="">全部获取渠道</option>
             </select>
           </label>
+          <label class="status-field">
+            <span>最新合作笔记</span>
+            <select id="latestNoteFilter">
+              <option value="">全部达人</option>
+              <option value="has">有最新合作笔记</option>
+              <option value="none">无最新合作笔记</option>
+            </select>
+          </label>
         </div>
         <div class="price-filter" aria-label="价位筛选">
           <label>
@@ -173,6 +241,8 @@
               <option value="picturePrice:desc">图文报价最高优先</option>
               <option value="videoPrice:asc">视频报价最低优先</option>
               <option value="videoPrice:desc">视频报价最高优先</option>
+              <option value="notePublishedAt:desc">最新合作笔记最新优先</option>
+              <option value="notePublishedAt:asc">最新合作笔记最早优先</option>
               <option value="exposure:desc">合作曝光最高优先</option>
               <option value="exposure:asc">合作曝光最低优先</option>
               <option value="read:desc">合作阅读最高优先</option>
@@ -250,34 +320,48 @@
         </div>
       </section>
 
-      <section class="write-panel">
+      <section id="writePanel" class="write-panel">
+        <button id="closeWritePanelBtn" type="button" class="write-panel-close" aria-label="关闭批量操作栏" title="关闭批量操作栏">×</button>
         <label class="check-row">
           <input id="selectAll" type="checkbox" />
           <span>全选当前筛选结果</span>
+          <em id="selectedCount">已选 0 位</em>
         </label>
         <div class="write-target-compact">
-          <span>写入目标</span>
-          <strong id="stickyWriteTarget">暂无可写入表格</strong>
+          <label for="stickyWriteTarget">写入目标</label>
+          <select id="stickyWriteTarget" aria-label="快速切换写入目标">
+            <option value="">暂无可写入表格</option>
+          </select>
+          <button id="writeFeishuBtn" type="button" class="primary" disabled>写入该表格</button>
         </div>
-        <div class="write-actions">
-          <span id="selectedCount">已选 0 位</span>
-          <button id="batchRemoveBtn" type="button" class="danger batch-remove" title="移除当前筛选结果中的达人" disabled>批量移除筛选结果</button>
-          <button id="writeFeishuBtn" type="button" class="primary" disabled>写入飞书表格</button>
-        </div>
-        <div class="tag-manager">
-          <div>
-            <span>已选达人批量用户标签</span>
-            <small>输入用户定义的达人类型或标签，也可点击已有标签快速添加。</small>
+        <label class="write-panel-filter">
+          <span>获取渠道</span>
+          <select id="quickAcquisitionFilter" aria-label="全部获取渠道"></select>
+        </label>
+        <label class="write-panel-filter">
+          <span>状态</span>
+          <select id="quickStatusFilter" aria-label="全部状态"></select>
+        </label>
+        <details class="tag-manager">
+          <summary class="tag-manager-summary">
+            <span>
+              <strong>新达人快速打标</strong>
+              <small>一键选择当前无标签达人，再批量打标</small>
+            </span>
+            <i aria-hidden="true"></i>
+          </summary>
+          <div class="tag-manager-body">
+            <div class="tag-manager-actions">
+              <button id="selectUntaggedBtn" type="button">选择无标签达人</button>
+              <input id="customTagInput" type="text" list="customTagSuggestions" placeholder="输入新达人的标签，例如：高性价比、母婴备选" />
+              <datalist id="customTagSuggestions"></datalist>
+              <button id="addTagBtn" type="button" class="primary">批量打标</button>
+            </div>
+            <div id="tagLibraryChips" class="tag-library-chips" aria-label="可复用标签库"></div>
           </div>
-          <div class="tag-manager-actions">
-            <input id="customTagInput" type="text" list="customTagSuggestions" placeholder="例如：高性价比、母婴备选" />
-            <datalist id="customTagSuggestions"></datalist>
-            <button id="addTagBtn" type="button" class="primary">添加到已选</button>
-            <button id="removeTagBtn" type="button">从已选移除</button>
-          </div>
-          <div id="tagLibraryChips" class="tag-library-chips" aria-label="可复用标签库"></div>
-        </div>
+        </details>
       </section>
+      <button id="openWritePanelBtn" type="button" class="write-panel-open" hidden>显示批量操作</button>
 
       <section id="favoriteList" class="favorite-list"></section>
     </main>
