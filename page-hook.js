@@ -143,20 +143,37 @@
 
   function fallbackNoteTypeValue(kol) {
     const noteTypes = Array.isArray(kol?.noteList)
-      ? Array.from(new Set(kol.noteList.map((note) => Number(note?.noteType)).filter(Boolean)))
+      ? Array.from(new Set(kol.noteList.map((note) => normalizedNoteTypeValue(note?.noteType)).filter(Boolean)))
       : [];
     if (noteTypes.length) {
-      const labels = noteTypes.map((type) => (type === 1 ? "图文" : type === 2 ? "视频" : `类型${type}`));
-      return labels.join("/");
+      return noteTypes.join("/");
     }
     const available = [];
     if (Number(kol?.pictureState) === 1 || Number(kol?.picturePrice) > 0) available.push("图文");
     if (Number(kol?.videoState) === 1 || Number(kol?.videoPrice) > 0) available.push("视频");
     if (available.length) return available.join("/");
-    return deepFindByKeyPattern(kol, (key) => {
+    return normalizedNoteTypeValue(deepFindByKeyPattern(kol, (key) => {
       const normalized = key.toLowerCase();
       return /(note.*type|content.*type|media.*type|笔记类型|内容形式)/i.test(normalized);
-    });
+    }));
+  }
+
+  function normalizedNoteTypeValue(value) {
+    if (value === null || value === undefined || value === "") return "";
+    if (typeof value === "boolean") return value ? "视频" : "图文";
+    if (typeof value === "number") {
+      if (value === 1) return "图文";
+      if (value === 2) return "视频";
+    }
+    const text = String(value).trim().toLowerCase();
+    const hasVideo = /视频|video|动态/.test(text);
+    const hasPicture = /图文|图片|image|picture|photo/.test(text);
+    if (hasVideo && hasPicture) return "";
+    if (hasVideo) return "视频";
+    if (hasPicture) return "图文";
+    if (/^1(?:\.0+)?$/.test(text)) return "图文";
+    if (/^2(?:\.0+)?$/.test(text)) return "视频";
+    return "";
   }
 
   function fallbackCooperationOrderValue(kol) {
@@ -233,7 +250,7 @@
       liked_collected_count: nestedValue(kol, ["likeCollectCountInfo", "likedCollectedCount", "likeCollectCount", "likeAndCollectCount", "likeCollectNum", "likedCollectNum", "collectCount", "favoriteCount", "likedCount"]) || fallbackLikedCollectedValue(kol),
       quote_price: nestedValue(kol, ["picturePrice", "price", "quotePrice", "imageQuotePrice", "picPrice"]),
       video_quote_price: nestedValue(kol, ["videoPrice", "videoQuotePrice"]),
-      note_type: nestedValue(kol, ["noteType", "contentType", "noteContentType", "mediaType", "contentForm", "noteForm"]) || fallbackNoteTypeValue(kol),
+      note_type: normalizedNoteTypeValue(nestedValue(kol, ["noteType", "contentType", "noteContentType", "mediaType", "contentForm", "noteForm"])) || fallbackNoteTypeValue(kol),
       cooperation_order_count: nestedValue(kol, ["progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt", "tradeOrderCnt", "businessOrderCnt"]) || fallbackCooperationOrderValue(kol),
       cooperation_note_count: nestedValue(kol, ["businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d"]) || fallbackCooperationNoteValue(kol),
       daily_exposure_median: nestedValue(kol, ["accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"]),
@@ -253,7 +270,7 @@
       video_completion_rate: nestedValue(kol, ["videoFinishRate", "videoFullViewRate"]),
       thousand_like_note_ratio: nestedValue(kol, ["thousandLikePercent30"]),
       hundred_like_note_ratio: nestedValue(kol, ["hundredLikePercent30"]),
-      creator_type: compactTagText(nestedValue(kol, ["categoryName", "category", "contentTags", "tradeType", "industryTag", "type"])),
+      creator_category: compactTagText(nestedValue(kol, ["categoryName", "category", "contentTags", "tradeType", "industryTag", "type"])),
       ip_city: nestedValue(kol, ["location", "city"]),
       source: "pgy_browser_extension",
       collected_at: nowText(),

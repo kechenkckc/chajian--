@@ -1390,7 +1390,16 @@
     });
   }
 
+  const CONTENT_MESSAGE_TYPES = new Set([
+    "PGY_GET_CAPTURE",
+    "PGY_EXPORT_ALL",
+    "PGY_STOP_EXPORT",
+    "PGY_SYNC_FEISHU",
+    "PGY_SAVE_OPTIONS"
+  ]);
+
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+    if (!CONTENT_MESSAGE_TYPES.has(message?.type)) return false;
     (async () => {
       if (message?.type === "PGY_GET_CAPTURE") sendResponse(await getCapture());
       if (message?.type === "PGY_EXPORT_ALL") sendResponse(await exportAll({ download: Boolean(message.download) }));

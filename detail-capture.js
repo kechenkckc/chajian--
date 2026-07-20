@@ -15,6 +15,8 @@
   const PREFAVORITE_STAGE_NAMES = ["", "读取达人信息", "保存达人库", "补全报价数据", "完成"];
   const FAVORITE_STAGE_PROGRESS = [0, 12, 45, 78, 100];
   const PREFAVORITE_STAGE_PROGRESS = [0, 12, 42, 75, 100];
+  const FAVORITE_CONNECTION_INTERRUPTED = "任务连接中断，请检查飞书写入结果";
+  const favoriteTaskPollers = new Map();
 
   function reportPanelTask(payload) {
     window.postMessage({ source: PANEL_TASK_SOURCE, type: "PANEL_TASK_STATUS", payload }, "*");
@@ -56,6 +58,121 @@
       metaText: options.metaText || "1 位达人",
       resetTimer: options.resetTimer
     });
+  }
+
+  function isFavoriteMessageChannelError(error) {
+    return /message channel closed|message port closed|asynchronous response|extension context invalidated|receiving end does not exist/i.test(
+      String(error?.message || error || "")
+    );
+  }
+
+  function favoriteButtonForUser(userId, fallbackButton = null) {
+    const cleanUserId = String(userId || "");
+    const currentUserId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    if (cleanUserId && cleanUserId === currentUserId) return document.getElementById("pgy-detail-favorite-btn") || fallbackButton;
+    if (cleanUserId) {
+      return document.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(cleanUserId)}"]`) || fallbackButton;
+    }
+    return fallbackButton;
+  }
+
+  function reportFavoriteConnectionInterrupted(button) {
+    if (button) {
+      button.textContent = "状态待确认";
+      button.disabled = false;
+      button.classList.remove("is-accepted");
+      button.dataset.favoriteTaskStatus = "disconnected";
+    }
+    reportFavoriteTask("running", FAVORITE_CONNECTION_INTERRUPTED, {
+      step: favoriteTaskStep || 3,
+      progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 78,
+      stageName: "状态待确认",
+      resetTimer: false
+    });
+    showFavoriteToast(FAVORITE_CONNECTION_INTERRUPTED);
+  }
+
+  function applyFavoriteWriteTask(task, fallbackButton = null) {
+    if (!task) return false;
+    const button = favoriteButtonForUser(task.userId, fallbackButton);
+    const status = String(task.status || "running");
+    const previousStatus = button?.dataset.favoriteTaskStatus || "";
+    if (button) {
+      button.dataset.favoriteTaskId = String(task.taskId || "");
+      button.dataset.favoriteTaskStatus = status;
+    }
+    if (status === "queued" || status === "running") {
+      if (button) {
+        button.textContent = "★ 后台写入中";
+        button.disabled = true;
+        button.classList.remove("is-accepted");
+      }
+      reportFavoriteTask("running", task.message || "正在从蒲公英抓取达人完整详情", {
+        step: Number(task.step || 1),
+        progress: Number(task.progress || 12),
+        stageName: task.stageName || "提交任务",
+        resetTimer: false
+      });
+      return false;
+    }
+    if (status === "completed") {
+      if (button) {
+        button.textContent = "✓ 已写入飞书";
+        button.disabled = true;
+        button.classList.add("is-accepted");
+      }
+      reportFavoriteTask("completed", task.message || "达人完整数据已写入飞书", { resetTimer: false });
+      if (previousStatus !== "completed") showFavoriteToast("写入完成，达人数据已写入飞书。");
+      return true;
+    }
+    if (status === "failed") {
+      if (button) {
+        button.textContent = "☆ 写入飞书";
+        button.disabled = false;
+        button.classList.remove("is-accepted");
+      }
+      reportFavoriteTask("failed", task.message || "写入飞书失败", {
+        step: Number(task.step || favoriteTaskStep || 1),
+        progress: Number(task.progress || FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12),
+        stageName: task.stageName || FAVORITE_STAGE_NAMES[favoriteTaskStep] || "当前阶段",
+        resetTimer: false
+      });
+      if (previousStatus !== "failed") showFavoriteToast(task.message || "写入飞书失败", true);
+      return true;
+    }
+    return false;
+  }
+
+  function watchFavoriteWriteTask(taskId, userId, fallbackButton = null) {
+    if (!taskId || favoriteTaskPollers.has(taskId)) return;
+    const poll = async () => {
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "GET_FAVORITE_WRITE_TASK", taskId, userId });
+        if (!result?.ok) throw new Error(result?.message || "读取写入任务状态失败");
+        if (applyFavoriteWriteTask(result.task, fallbackButton)) {
+          window.clearInterval(favoriteTaskPollers.get(taskId));
+          favoriteTaskPollers.delete(taskId);
+        }
+      } catch (error) {
+        window.clearInterval(favoriteTaskPollers.get(taskId));
+        favoriteTaskPollers.delete(taskId);
+        if (isFavoriteMessageChannelError(error)) reportFavoriteConnectionInterrupted(fallbackButton);
+        else reportFavoriteConnectionInterrupted(fallbackButton);
+      }
+    };
+    favoriteTaskPollers.set(taskId, window.setInterval(poll, 2000));
+    window.setTimeout(poll, 300);
+  }
+
+  async function restoreFavoriteWriteTask() {
+    const userId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+    if (!userId) return;
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "GET_FAVORITE_WRITE_TASK", userId });
+      if (!result?.ok || !result.task) return;
+      const finished = applyFavoriteWriteTask(result.task, document.getElementById("pgy-detail-favorite-btn"));
+      if (!finished) watchFavoriteWriteTask(result.task.taskId, userId, document.getElementById("pgy-detail-favorite-btn"));
+    } catch {}
   }
 
   function sleep(ms) {
@@ -719,21 +836,27 @@
               detailUrl
             });
             if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
-            favoriteButton.textContent = result.completed ? "✓ 已写入飞书" : "✓ 已发起写入";
-            favoriteButton.classList.add("is-accepted");
-            reportFavoriteTask(
-              result.completed ? "completed" : "running",
-              result.completed ? `${bloggerName || "该达人"}的完整数据已写入飞书` : `正在从蒲公英抓取${bloggerName || "该达人"}的完整详情`,
-              { step: result.completed ? 4 : 2, progress: result.completed ? 100 : 45, resetTimer: false }
-            );
-            showFavoriteToast(result.completed
-              ? `已将${bloggerName || "该达人"}写入飞书。`
-              : `已开始后台写入${bloggerName || "该达人"}。`);
+            const task = result.task || {
+              taskId: result.taskId,
+              userId: result.userId || userId,
+              status: result.status || "queued",
+              step: 1,
+              progress: 12,
+              stageName: "提交任务",
+              message: `正在处理${bloggerName || "该达人"}的写入任务`
+            };
+            const finished = applyFavoriteWriteTask(task, favoriteButton);
+            if (!finished) watchFavoriteWriteTask(task.taskId, task.userId || userId, favoriteButton);
+            showFavoriteToast(`已开始后台写入${bloggerName || "该达人"}。`);
           } catch (error) {
-            favoriteButton.textContent = "☆ 写入飞书";
-            favoriteButton.disabled = false;
-            reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
-            showFavoriteToast(error?.message || String(error), true);
+            if (isFavoriteMessageChannelError(error)) {
+              reportFavoriteConnectionInterrupted(favoriteButton);
+            } else {
+              favoriteButton.textContent = "☆ 写入飞书";
+              favoriteButton.disabled = false;
+              reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
+              showFavoriteToast(error?.message || String(error), true);
+            }
           }
         }, true);
       }
@@ -817,21 +940,27 @@
         try {
           const result = await chrome.runtime.sendMessage({ type: "FAVORITE_CURRENT_DETAIL" });
           if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
-          button.textContent = result.completed ? "✓ 已写入飞书" : "★ 后台写入中";
-          if (result.completed) button.classList.add("is-accepted");
-          reportFavoriteTask(
-            result.completed ? "completed" : "running",
-            result.completed ? "达人完整数据已写入飞书" : "正在从蒲公英抓取当前达人的完整详情",
-            { step: result.completed ? 4 : 2, progress: result.completed ? 100 : 45, resetTimer: false }
-          );
-          showFavoriteToast(result.completed
-            ? "写入完成，达人数据已写入飞书。"
-            : "写入任务已开始，完成后会系统通知。");
+          const task = result.task || {
+            taskId: result.taskId,
+            userId: result.userId,
+            status: result.status || "queued",
+            step: 1,
+            progress: 12,
+            stageName: "提交任务",
+            message: "正在处理当前达人的写入任务"
+          };
+          const finished = applyFavoriteWriteTask(task, button);
+          if (!finished) watchFavoriteWriteTask(task.taskId, task.userId, button);
+          showFavoriteToast("写入任务已开始，完成后会系统通知。");
         } catch (error) {
-          button.textContent = "☆ 写入飞书";
-          button.disabled = false;
-          reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
-          showFavoriteToast(error?.message || String(error), true);
+          if (isFavoriteMessageChannelError(error)) {
+            reportFavoriteConnectionInterrupted(button);
+          } else {
+            button.textContent = "☆ 写入飞书";
+            button.disabled = false;
+            reportFavoriteTask("failed", error?.message || String(error), { progress: FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12, resetTimer: false });
+            showFavoriteToast(error?.message || String(error), true);
+          }
         }
       });
     }
@@ -1437,41 +1566,10 @@
       return true;
     }
     if (message?.type === "PGY_FAVORITE_TASK_STATUS") {
-      const currentUserId = (location.pathname.match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
-      const targetUserId = String(message.userId || "");
-      const mainButton = document.getElementById("pgy-detail-favorite-btn");
-      const similarButton = targetUserId
-        ? document.querySelector(`.pgy-similar-favorite-btn[data-user-id="${CSS.escape(targetUserId)}"]`)
-        : null;
-      const targetButton = targetUserId === currentUserId ? mainButton : similarButton;
-      if (message.status === "running") {
-        reportFavoriteTask("running", message.message || "正在采集达人完整详情并写入飞书", {
-          step: Number(message.step || 2),
-          progress: Number(message.progress || 45),
-          stageName: message.stageName || "从蒲公英抓取",
-          resetTimer: false
-        });
-      } else if (message.status === "completed") {
-        if (targetButton) {
-          targetButton.textContent = "✓ 已写入飞书";
-          targetButton.disabled = true;
-          targetButton.classList.add("is-accepted");
-        }
-        reportFavoriteTask("completed", "达人完整数据已写入飞书", { resetTimer: false });
-        showFavoriteToast("写入完成，达人数据已写入飞书。");
-      } else if (message.status === "failed") {
-        if (targetButton) {
-          targetButton.textContent = "☆ 写入飞书";
-          targetButton.disabled = false;
-          targetButton.classList.remove("is-accepted");
-        }
-        reportFavoriteTask("failed", message.message || "写入飞书失败", {
-          step: Number(message.step || favoriteTaskStep || 1),
-          progress: Number(message.progress || FAVORITE_STAGE_PROGRESS[favoriteTaskStep] || 12),
-          stageName: message.stageName || FAVORITE_STAGE_NAMES[favoriteTaskStep] || "当前阶段",
-          resetTimer: false
-        });
-        showFavoriteToast(message.message || "写入飞书失败", true);
+      const finished = applyFavoriteWriteTask(message);
+      if (finished && message.taskId && favoriteTaskPollers.has(message.taskId)) {
+        window.clearInterval(favoriteTaskPollers.get(message.taskId));
+        favoriteTaskPollers.delete(message.taskId);
       }
       sendResponse({ ok: true });
       return false;
@@ -1484,10 +1582,12 @@
       installFavoriteButton();
       installSimilarFavoriteButtons();
       observeSimilarFavoriteCards();
+      restoreFavoriteWriteTask();
     }, { once: true });
   } else {
     installFavoriteButton();
     installSimilarFavoriteButtons();
     observeSimilarFavoriteCards();
+    restoreFavoriteWriteTask();
   }
 })();

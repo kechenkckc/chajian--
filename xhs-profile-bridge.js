@@ -9,6 +9,7 @@
   const FLOAT_CLASS = "pgy-xhs-profile-bridge-floating";
   const DETAIL_BASE = "https://pgy.xiaohongshu.com/solar/pre-trade/blogger-detail/";
   const USER_ID_RE = /\/user\/profile\/([^/?#]+)/;
+  const FAVORITE_CONNECTION_INTERRUPTED = "任务连接中断，请检查飞书写入结果";
 
 
   let renderTimer = 0;
@@ -16,6 +17,8 @@
   let cachedProfileUserId = "";
   let cachedProfileAvatar = null;
   let cachedProfileAnchor = null;
+  let favoriteTaskPoller = 0;
+  let restoredFavoriteTaskUserId = "";
 
   function currentXhsUserId() {
     const match = location.pathname.match(USER_ID_RE);
@@ -32,6 +35,80 @@
 
   function cleanText(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function isFavoriteMessageChannelError(error) {
+    return /message channel closed|message port closed|asynchronous response|extension context invalidated|receiving end does not exist/i.test(
+      String(error?.message || error || "")
+    );
+  }
+
+  function applyFavoriteWriteTask(task, button = document.getElementById(WRITE_BUTTON_ID)) {
+    if (!task || !button) return false;
+    const label = button.querySelector("strong");
+    button.dataset.favoriteTaskId = String(task.taskId || "");
+    button.dataset.favoriteTaskStatus = String(task.status || "running");
+    if (task.status === "queued" || task.status === "running") {
+      button.disabled = true;
+      button.classList.remove("is-saved");
+      button.title = task.message || "正在采集达人详情并写入飞书";
+      label.textContent = "后台写入中";
+      return false;
+    }
+    if (task.status === "completed") {
+      button.disabled = false;
+      button.classList.add("is-saved");
+      button.title = "达人数据已写入飞书";
+      label.textContent = "已写入飞书";
+      return true;
+    }
+    if (task.status === "failed") {
+      button.disabled = false;
+      button.classList.remove("is-saved");
+      button.title = task.message || "写入飞书失败";
+      label.textContent = "写入失败";
+      return true;
+    }
+    return false;
+  }
+
+  function reportFavoriteConnectionInterrupted(button = document.getElementById(WRITE_BUTTON_ID)) {
+    if (!button) return;
+    button.disabled = false;
+    button.classList.remove("is-saved");
+    button.title = FAVORITE_CONNECTION_INTERRUPTED;
+    button.querySelector("strong").textContent = "状态待确认";
+  }
+
+  function watchFavoriteWriteTask(taskId, userId, button) {
+    clearInterval(favoriteTaskPoller);
+    const poll = async () => {
+      try {
+        const result = await chrome.runtime.sendMessage({ type: "GET_FAVORITE_WRITE_TASK", taskId, userId });
+        if (!result?.ok) throw new Error(result?.message || "读取写入任务状态失败");
+        if (applyFavoriteWriteTask(result.task, button)) {
+          clearInterval(favoriteTaskPoller);
+          favoriteTaskPoller = 0;
+        }
+      } catch (error) {
+        clearInterval(favoriteTaskPoller);
+        favoriteTaskPoller = 0;
+        reportFavoriteConnectionInterrupted(button);
+      }
+    };
+    favoriteTaskPoller = window.setInterval(poll, 2000);
+    window.setTimeout(poll, 300);
+  }
+
+  async function restoreFavoriteWriteTask(userId) {
+    if (!userId || restoredFavoriteTaskUserId === userId) return;
+    restoredFavoriteTaskUserId = userId;
+    try {
+      const result = await chrome.runtime.sendMessage({ type: "GET_FAVORITE_WRITE_TASK", userId });
+      if (!result?.ok || !result.task) return;
+      const button = document.getElementById(WRITE_BUTTON_ID);
+      if (!applyFavoriteWriteTask(result.task, button)) watchFavoriteWriteTask(result.task.taskId, userId, button);
+    } catch {}
   }
 
   function isBadProfileText(text) {
@@ -250,18 +327,22 @@
       try {
         const result = await chrome.runtime.sendMessage({ type: "FAVORITE_DETAIL_URL", detailUrl });
         if (!result?.ok) throw new Error(result?.message || "写入飞书失败");
-        button.classList.add("is-saved");
-        button.querySelector("strong").textContent = result.completed ? "已写入飞书" : "后台写入中";
+        const task = result.task || {
+          taskId: result.taskId,
+          userId: result.userId || currentXhsUserId(),
+          status: result.status || "queued",
+          message: "写入任务已提交"
+        };
+        if (!applyFavoriteWriteTask(task, button)) watchFavoriteWriteTask(task.taskId, task.userId, button);
       } catch (error) {
-        button.classList.remove("is-saved");
-        button.title = error?.message || "写入飞书失败";
-        button.querySelector("strong").textContent = "写入失败";
-        setTimeout(() => {
-          button.title = "采集当前达人的蒲公英完整详情并写入飞书";
-          button.querySelector("strong").textContent = "写入飞书";
-        }, 1800);
-      } finally {
-        button.disabled = false;
+        if (isFavoriteMessageChannelError(error)) {
+          reportFavoriteConnectionInterrupted(button);
+        } else {
+          button.disabled = false;
+          button.classList.remove("is-saved");
+          button.title = error?.message || "写入飞书失败";
+          button.querySelector("strong").textContent = "写入失败";
+        }
       }
     });
     return button;
@@ -359,6 +440,7 @@
     }
     placeAtProfileHeader(bar, avatar);
     updateFavoriteState();
+    restoreFavoriteWriteTask(userId);
   }
 
   function scheduleRender() {
@@ -387,19 +469,9 @@
     if (message.userId && String(message.userId) !== currentUserId) return false;
     const button = document.getElementById(WRITE_BUTTON_ID);
     if (!button) return false;
-    const label = button.querySelector("strong");
-    if (message.status === "running") {
-      button.disabled = true;
-      label.textContent = "写入中...";
-    } else if (message.status === "completed") {
-      button.disabled = false;
-      button.classList.add("is-saved");
-      label.textContent = "已写入飞书";
-    } else if (message.status === "failed") {
-      button.disabled = false;
-      button.classList.remove("is-saved");
-      button.title = message.message || "写入飞书失败";
-      label.textContent = "写入失败";
+    if (applyFavoriteWriteTask(message, button) && favoriteTaskPoller) {
+      clearInterval(favoriteTaskPoller);
+      favoriteTaskPoller = 0;
     }
     sendResponse({ ok: true });
     return false;

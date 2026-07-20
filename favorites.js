@@ -158,9 +158,11 @@ function normalizeRating(value, fallbackDisplay = "stars", fallbackColumn = "达
   const rawValue = typeof value === "object" && value !== null ? value.value : value;
   const number = Number(rawValue);
   if (!Number.isFinite(number)) return null;
+  const sourceMax = Number(value?.max);
+  const normalizedValue = sourceMax === 5 ? number * 2 : number;
   return {
-    value: Math.max(0, Math.min(5, number)),
-    max: 5,
+    value: Math.max(0, Math.min(10, normalizedValue)),
+    max: 10,
     display: (value?.display || fallbackDisplay) === "score" ? "score" : "stars",
     columnName: String(value?.columnName || fallbackColumn || "达人评分").trim() || "达人评分"
   };
@@ -824,14 +826,14 @@ function costMetricText(value) {
 
 function ratingDisplayText(rating) {
   if (!rating || !Number.isFinite(rating.value)) return "未评分";
-  if (ratingDisplaySelect.value === "score") return `${rating.value}/5 分`;
-  const fullStars = Math.max(0, Math.min(5, Math.floor(rating.value)));
-  return `${"★".repeat(fullStars)}${"☆".repeat(5 - fullStars)} · ${rating.value}/5`;
+  if (ratingDisplaySelect.value === "score") return `${rating.value}/10 分`;
+  const fullStars = Math.max(0, Math.min(10, Math.floor(rating.value)));
+  return `${"★".repeat(fullStars)}${"☆".repeat(10 - fullStars)} · ${rating.value}/10`;
 }
 
 function headlineRatingText(rating) {
   if (rating) return ratingDisplayText(rating);
-  return ratingDisplaySelect.value === "score" ? "0/5 分" : "☆☆☆☆☆ · 0/5";
+  return ratingDisplaySelect.value === "score" ? "0/10 分" : "☆☆☆☆☆☆☆☆☆☆ · 0/10";
 }
 
 function matchesPriceFilter(item) {
@@ -1559,7 +1561,7 @@ function renderFavorites() {
         <div class="favorite-info">
           <div class="headline">
             <a class="profile-link nickname-link" href="${escapeHtml(pgyUrl)}" target="_blank" rel="noopener" title="打开 ${escapeHtml(name)} 的蒲公英主页">${escapeHtml(name)}</a>
-            <button type="button" class="headline-rating ${item.rating ? "has-rating" : ""}" data-action="edit-rating" title="${escapeHtml(item.rating?.columnName || ratingColumnInput.value || "达人评分")}，点击设置 0-5 分">${escapeHtml(headlineRatingText(item.rating))}</button>
+            <button type="button" class="headline-rating ${item.rating ? "has-rating" : ""}" data-action="edit-rating" title="${escapeHtml(item.rating?.columnName || ratingColumnInput.value || "达人评分")}，点击设置 0-10 分">${escapeHtml(headlineRatingText(item.rating))}</button>
             <div class="cooperation-count-badge ${cooperationCountKnown ? "is-known" : "is-pending"}" title="优先按当前在线大表中出现过该达人的不同子表数量统计；旧版导入记录会用已读取的来源子表数量补齐">
               <span>合作次数</span><strong>${escapeHtml(cooperationCountText)}</strong>
             </div>
@@ -1628,7 +1630,7 @@ async function clearFavorites() {
 async function editFavoriteRating(userId) {
   const item = favorites.find((favorite) => favorite.userId === userId);
   if (!item) return;
-  const value = window.prompt("设置达人评分（0-5，支持 0.5 分；清空表示移除评分）", item.rating?.value ?? "");
+  const value = window.prompt("设置达人评分（0-10，支持 0.5 分；清空表示移除评分）", item.rating?.value ?? "");
   if (value === null) return;
   const text = String(value).trim();
   const rating = text === "" ? null : normalizeRating({
@@ -1636,7 +1638,7 @@ async function editFavoriteRating(userId) {
     display: ratingDisplaySelect.value,
     columnName: ratingColumnInput.value || item.rating?.columnName || "达人评分"
   });
-  if (text && (!rating || Number(text) < 0 || Number(text) > 5)) throw new Error("评分必须是 0-5 之间的数字。");
+  if (text && (!rating || Number(text) < 0 || Number(text) > 10)) throw new Error("评分必须是 0-10 之间的数字。");
   await saveImportFieldOptions();
   await saveFavorites(favorites.map((favorite) => favorite.userId === userId
     ? { ...favorite, rating, updatedAt: new Date().toISOString() }

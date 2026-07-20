@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "蒲公英达人导出同步飞书",
-  "version": "0.7.12",
+  "version": "0.7.13",
   "description": "导出蒲公英当前筛选条件下的达人表格，同步到飞书，并补足详情。",
-  "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs", "sidePanel", "debugger", "notifications"],
+  "permissions": ["storage", "downloads", "activeTab", "scripting", "tabs", "sidePanel", "debugger", "notifications", "alarms"],
   "host_permissions": [
     "<all_urls>",
     "https://pgy.xiaohongshu.com/*",

@@ -51,6 +51,7 @@ let detailStopRequested = false;
 let detailCaptureLock = Promise.resolve();
 let detailOpenTabGate = Promise.resolve();
 let detailFastTabId = 0;
+let favoriteDetailCollectionLock = Promise.resolve();
 const DETAIL_BACKFILL_CONCURRENCY = 2;
 const DETAIL_OPEN_TAB_STAGGER_MS = 1500;
 const DETAIL_REQUEST_DELAY_MIN_MS = 1000;
@@ -65,6 +66,12 @@ const DETAIL_FAST_API_MODE = true;
 const SHEET_WRITE_RETRY_DELAY_MS = 800;
 const SHEET_WRITE_VERIFY_DELAY_MS = 1000;
 const SHEET_WRITE_VERIFY_RETRIES = 2;
+const FAVORITE_TASKS_STORAGE_KEY = "favoriteWriteTasks";
+const FAVORITE_TASK_ALARM_PREFIX = "pgy-favorite-write:";
+const FAVORITE_TASK_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+const FAVORITE_TASK_MAX_COUNT = 100;
+const runningFavoriteTaskIds = new Set();
+let favoriteTaskStorageLock = Promise.resolve();
 const DETAIL_NOTIFICATION_ICON =
   "data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' rx='24' fill='%232f6bff'/%3E%3Cpath fill='white' d='M31 36h66v12H31zm0 22h66v12H31zm0 22h42v12H31z'/%3E%3C/svg%3E";
 
@@ -114,6 +121,10 @@ const STANDARD_FIELDS = [
   "合作次数",
   "合作订单数",
   "已合作笔记数",
+  "最新合作笔记ID",
+  "最新合作笔记标题",
+  "最新合作笔记发布时间",
+  "最新合作笔记发布链接",
   "曝光中位数（日常）",
   "阅读中位数（日常）",
   "互动中位数（日常）",
@@ -158,6 +169,10 @@ const FIELD_ALIASES = {
   "合作次数": ["合作次数", "历史合作次数", "达人合作次数", "跨子表合作次数", "cooperation_count", "cooperationCount"],
   "合作订单数": ["合作订单数", "已合作订单数", "商单数", "商业笔记数", "cooperation_order_count", "progressOrderCnt", "cooperationOrderCnt", "coopOrderCnt", "orderCnt", "orderCount", "completedOrderCnt", "finishOrderCnt"],
   "已合作笔记数": ["已合作笔记数", "已合作笔记", "合作笔记数", "商业笔记数", "cooperation_note_count", "businessNoteCount", "cooperatedNoteCnt", "cooperationNoteCnt", "businessNoteCnt", "bizNoteCnt", "noteCooperateCnt", "progressNoteCnt", "finishedNoteCnt", "coopNoteNum30d", "progressOrderCnt"],
+  "最新合作笔记ID": ["最新合作笔记ID", "合作笔记ID", "笔记ID", "noteId", "latestCooperationNoteId", "latest_note_id"],
+  "最新合作笔记标题": ["最新合作笔记标题", "合作笔记标题", "笔记标题", "latestCooperationNoteTitle", "latest_note_title"],
+  "最新合作笔记发布时间": ["发布时间", "视频发布时间", "笔记发布时间", "合作视频发布时间", "合作笔记发布时间", "最新合作笔记发布时间", "最新笔记发布时间", "latestCooperationNotePublishedAt", "latest_note_published_at"],
+  "最新合作笔记发布链接": ["发布链接", "视频链接", "合作视频链接", "笔记发布链接", "合作笔记发布链接", "最新合作笔记发布链接", "最新笔记链接", "小红书笔记链接", "latestCooperationNoteUrl", "latest_note_url"],
   "曝光中位数（日常）": ["曝光中位数（日常）", "日常曝光中位数", "曝光量", "预估曝光量", "达人历史平均曝光量", "达人历史 平均曝光量", "达人历史平均曝光量/阅读量/互动总量", "daily_exposure_median", "accumCommonImpMedinNum30d", "impMedian", "mAccumImpNum", "exposureMedian"],
   "阅读中位数（日常）": ["阅读中位数（日常）", "阅读中位数", "日常阅读中位数", "阅读量", "平均阅读量", "达人历史平均阅读量", "达人历史/平均阅读量", "达人历史 平均阅读量", "平均播放量/阅读量", "达人历史平均曝光量/阅读量/互动总量", "daily_read_median", "clickMidNum", "readMedian", "readMedianNum"],
   "互动中位数（日常）": ["互动中位数（日常）", "日常互动中位数", "互动", "预估互动", "平均互动量", "达人历史平均互动总量", "达人历史 平均互动总量", "达人历史平均曝光量/阅读量/互动总量", "daily_interaction_median", "mEngagementNum", "mengagementNum", "interactionMedian"],
@@ -230,6 +245,7 @@ function cellText(value) {
     if ((value.type && String(value.type).includes("image")) || value.fileToken) return jsonText(value);
     if (value.text !== undefined && value.text !== null && value.text !== "") return String(value.text);
     if (value.link !== undefined && value.link !== null && value.link !== "") return String(value.link);
+    if (value.url !== undefined && value.url !== null && value.url !== "") return String(value.url);
     if (value.value !== undefined && value.value !== null) return cellText(value.value);
     try {
       return JSON.stringify(value);
@@ -238,6 +254,21 @@ function cellText(value) {
     }
   }
   return String(value || "");
+}
+
+function linkedCellText(value) {
+  if (value === null || value === undefined) return "";
+  if (Array.isArray(value)) return value.map((item) => linkedCellText(item)).filter(Boolean).join("");
+  if (typeof value === "object") {
+    if (value.link !== undefined && value.link !== null && value.link !== "") return String(value.link);
+    if (value.url !== undefined && value.url !== null && value.url !== "") return String(value.url);
+  }
+  return cellText(value);
+}
+
+function isSheetLinkColumn(header, canonicalField = "") {
+  if (["蒲公英链接", "主页链接", "发布链接", "头像链接"].includes(String(canonicalField || ""))) return true;
+  return /(蒲公英|小红书|主页|头像|发布|视频|笔记).*(链接|网址|url)|^(链接|网址|url)$/i.test(cellText(header).replace(/\s+/g, ""));
 }
 
 function normalizeKey(value) {
@@ -316,20 +347,19 @@ function fallbackRedIdValue(row) {
 function fallbackNoteTypeValue(row) {
   const raw = row?.raw_payload && typeof row.raw_payload === "object" ? row.raw_payload : row;
   const noteTypes = Array.isArray(raw?.noteList)
-    ? Array.from(new Set(raw.noteList.map((note) => Number(note?.noteType)).filter(Boolean)))
+    ? Array.from(new Set(raw.noteList.map((note) => normalizedCreatorNoteType(note?.noteType)).filter(Boolean)))
     : [];
   if (noteTypes.length) {
-    const labels = noteTypes.map((type) => (type === 1 ? "图文" : type === 2 ? "视频" : `类型${type}`));
-    return labels.join("/");
+    return noteTypes.join("/");
   }
   const available = [];
   if (Number(raw?.pictureState) === 1 || Number(raw?.picturePrice) > 0) available.push("图文");
   if (Number(raw?.videoState) === 1 || Number(raw?.videoPrice) > 0) available.push("视频");
   if (available.length) return available.join("/");
-  return deepFindByKeyPattern(raw, (key) => {
+  return normalizedCreatorNoteType(deepFindByKeyPattern(raw, (key) => {
     const normalized = key.toLowerCase();
     return /(note.*type|content.*type|media.*type|笔记类型|内容形式)/i.test(normalized);
-  });
+  }));
 }
 
 function normalizedCreatorNoteType(value) {
@@ -341,10 +371,21 @@ function normalizedCreatorNoteType(value) {
   }
   const text = cellText(value).trim().toLowerCase();
   if (!text) return "";
-  if (/视频|video|动态/.test(text)) return "视频";
-  if (/图文|图片|image|picture|photo/.test(text)) return "图文";
+  const hasVideo = /视频|video|动态/.test(text);
+  const hasPicture = /图文|图片|image|picture|photo/.test(text);
+  if (hasVideo && hasPicture) return "";
+  if (hasVideo) return "视频";
+  if (hasPicture) return "图文";
   if (/^1(?:\.0+)?$/.test(text)) return "图文";
   if (/^2(?:\.0+)?$/.test(text)) return "视频";
+  return "";
+}
+
+function normalizedNoteTypeDisplay(value) {
+  const singleType = normalizedCreatorNoteType(value);
+  if (singleType) return singleType;
+  const text = cellText(value).trim().toLowerCase();
+  if (/图文|图片|image|picture|photo/.test(text) && /视频|video|动态/.test(text)) return "图文/视频";
   return "";
 }
 
@@ -360,7 +401,35 @@ function noteCaseCreatorType(note) {
 
 function creatorTypeFromDetail(detail) {
   const raw = detail?.raw_payload && typeof detail.raw_payload === "object" ? detail.raw_payload : {};
-  const notes = [raw.note_cases, raw.recent_notes, raw.recent_note_briefs, raw.noteList]
+  const notePerformance = raw.note_performance && typeof raw.note_performance === "object" ? raw.note_performance : {};
+  const totalNoteCount = Number(notePerformance.note_count);
+  const videoNoteCount = Number(notePerformance.video_note_count);
+  if (Number.isFinite(totalNoteCount) && totalNoteCount > 0 && Number.isFinite(videoNoteCount) && videoNoteCount >= 0) {
+    const pictureNoteCount = Math.max(0, totalNoteCount - videoNoteCount);
+    if (pictureNoteCount > videoNoteCount) return "图文";
+    if (videoNoteCount > pictureNoteCount) return "视频";
+  }
+  const detailApiCache = raw.detail_api_cache && typeof raw.detail_api_cache === "object" ? raw.detail_api_cache : {};
+  const detailProfile = detailApiCache.blogger_profile && typeof detailApiCache.blogger_profile === "object" ? detailApiCache.blogger_profile : {};
+  const listProfile = detailApiCache.blogger_list_profile && typeof detailApiCache.blogger_list_profile === "object" ? detailApiCache.blogger_list_profile : {};
+  const profile = { ...detailProfile, ...listProfile };
+  let pictureMetricVotes = 0;
+  let videoMetricVotes = 0;
+  const metricPairs = [
+    ["accumPicCommonImpMedinNum30d", "accumVideoCommonImpMedinNum30d"],
+    ["pictureClickMidNum", "videoClickMidNum"],
+    ["pictureInterMidNum", "videoInterMidNum"]
+  ];
+  for (const [pictureKey, videoKey] of metricPairs) {
+    const pictureValue = Number(profile[pictureKey]);
+    const videoValue = Number(profile[videoKey]);
+    if (!Number.isFinite(pictureValue) || !Number.isFinite(videoValue) || pictureValue === videoValue) continue;
+    if (pictureValue > videoValue) pictureMetricVotes += 1;
+    if (videoValue > pictureValue) videoMetricVotes += 1;
+  }
+  if (pictureMetricVotes > videoMetricVotes) return "图文";
+  if (videoMetricVotes > pictureMetricVotes) return "视频";
+  const notes = [raw.note_cases, raw.recent_notes, raw.recent_note_briefs, raw.noteList, profile.noteList]
     .find((items) => Array.isArray(items) && items.length) || [];
   let pictureCount = 0;
   let videoCount = 0;
@@ -441,6 +510,10 @@ function normalizeExportRow(row) {
   const nickname = valueByAliases(row, "达人昵称") || nestedValue(raw, ["name", "nickName", "nickname"]);
   const followers = valueByAliases(row, "粉丝数") || fallbackFollowersValue(row);
   const followersNumber = numericValue(followers);
+  const noteType = normalizedNoteTypeDisplay(valueByAliases(row, "笔记类型")) || fallbackNoteTypeValue(row);
+  const rawCreatorType = valueByAliases(row, "博主类型");
+  const creatorType = normalizedCreatorNoteType(rawCreatorType) || normalizedCreatorNoteType(noteType);
+  const legacyCreatorCategory = raw?.creator_type && !normalizedCreatorNoteType(raw.creator_type) ? raw.creator_type : "";
   const output = {
     "达人ID": String(row?.creator_id || (userId ? `pgy-api:${userId}` : "")),
     "达人昵称": nickname || "",
@@ -457,7 +530,8 @@ function normalizeExportRow(row) {
     "完播率": valueByAliases(row, "完播率"),
     "CPM": numericValue(valueByAliases(row, "CPM")),
     "CPE": numericValue(valueByAliases(row, "CPE")),
-    "笔记类型": valueByAliases(row, "笔记类型") || fallbackNoteTypeValue(row),
+    "笔记类型": noteType,
+    "博主类型": creatorType,
     "合作订单数": numericValue(valueByAliases(row, "合作订单数") || fallbackCooperationOrderValue(row)),
     "已合作笔记数": numericValue(valueByAliases(row, "已合作笔记数") || fallbackCooperationNoteValue(row)),
     "曝光中位数（日常）": numericValue(valueByAliases(row, "曝光中位数（日常）")),
@@ -473,7 +547,7 @@ function normalizeExportRow(row) {
     "邀约48h回复率": valueByAliases(row, "邀约48h回复率"),
     "图文3秒阅读率": valueByAliases(row, "图文3秒阅读率"),
     "粉丝增长率": valueByAliases(row, "粉丝增长率"),
-    "账号类型": compactTagText(valueByAliases(row, "账号类型") || rawValueByKeys(row, ["contentTags", "tradeType", "industryTag", "type"])),
+    "账号类型": compactTagText(valueByAliases(row, "账号类型") || rawValueByKeys(row, ["creator_category", "contentTags", "tradeType", "industryTag", "type"]) || legacyCreatorCategory),
     "IP城市": valueByAliases(row, "IP城市"),
     "数据来源": valueByAliases(row, "数据来源") || "pgy_browser_extension",
     "采集时间": valueByAliases(row, "采集时间") || new Date().toISOString().slice(0, 19).replace("T", " "),
@@ -754,6 +828,14 @@ function rowMatchKeys(row) {
   ]
     .map((value) => normalizeKey(value))
     .filter(Boolean);
+}
+
+function rowsReferToSameCreator(left, right) {
+  const leftUserId = normalizeKey(extractPgyUserId(left));
+  const rightUserId = normalizeKey(extractPgyUserId(right));
+  if (leftUserId || rightUserId) return Boolean(leftUserId && rightUserId && leftUserId === rightUserId);
+  const rightKeys = new Set(rowMatchKeys(right));
+  return rowMatchKeys(left).some((key) => rightKeys.has(key));
 }
 
 function cooperationIdentityKeys(row) {
@@ -1429,7 +1511,7 @@ function sheetRowsToObjects(values) {
   return values.slice(1).map((line, index) => {
     const row = {};
     headers.forEach((header, column) => {
-      if (header) row[header] = cellText(line[column]);
+      if (header) row[header] = isSheetLinkColumn(header) ? linkedCellText(line[column]) : cellText(line[column]);
     });
     return { rowNumber: index + 2, row };
   });
@@ -1618,6 +1700,11 @@ function semanticCanonicalFieldForHeader(header, context = "") {
   if (!unsafeName && has(/达人|博主|kol|账号|creator|blogger/i) && has(/昵称|名称|名字|name|nick/i)) return "达人昵称";
   if (has(/达人|博主|kol|账号|creator|blogger/i) && has(/\bid\b|编号|userid|bloggerid|creatorid|kolid/i)) return "达人ID";
 
+  if (leafHas(/^(最新合作笔记|合作笔记|笔记)(id|编号)$/i)) return "最新合作笔记ID";
+  if (has(/最新合作|合作视频|合作笔记|最新笔记/) && has(/标题|名称|title/i)) return "最新合作笔记标题";
+  if (leafHas(/^(发布时间|视频发布时间|笔记发布时间|合作视频发布时间|合作笔记发布时间|最新合作笔记发布时间|最新笔记发布时间)$/i)) return "最新合作笔记发布时间";
+  if (leafHas(/^(发布链接|视频链接|合作视频链接|笔记发布链接|合作笔记发布链接|最新合作笔记发布链接|最新笔记链接|小红书笔记链接)$/i)) return "最新合作笔记发布链接";
+
   if (has(/粉丝|fans|follower/i) && has(/变化|幅度|增长|涨粉|增幅|growth/i)) return "粉丝增长率";
   if (has(/粉丝|fans|follower/i) && has(/画像|portrait/) && has(/截图|图片|image|screenshot/i)) return "粉丝画像截图";
   if (has(/笔记|数据|概览|overview/) && has(/截图|图片|image|screenshot/i)) return "笔记数据截图";
@@ -1785,6 +1872,57 @@ function canonicalFieldForHeader(header, context = "") {
   return "";
 }
 
+function contiguousSheetWriteRanges(sheetId, rowNumber, writes) {
+  const ordered = [...writes]
+    .filter((write) => Number.isInteger(write.columnIndex) && write.columnIndex >= 0)
+    .sort((left, right) => left.columnIndex - right.columnIndex);
+  const groups = [];
+  for (const write of ordered) {
+    const normalized = {
+      ...write,
+      value: normalizeSheetWriteValue(write.value, write.fieldName || "")
+    };
+    const current = groups[groups.length - 1];
+    if (!current || normalized.columnIndex !== current[current.length - 1].columnIndex + 1) groups.push([normalized]);
+    else current.push(normalized);
+  }
+  return groups.map((group) => ({
+    range: `${sheetId}!${columnName(group[0].columnIndex + 1)}${rowNumber}:${columnName(group[group.length - 1].columnIndex + 1)}${rowNumber}`,
+    values: [group.map((write) => write.value)]
+  }));
+}
+
+async function writeSheetCellsBatchBestEffort(token, spreadsheetToken, sheetId, rowNumber, writes) {
+  if (!writes.length) return { ok: true, writtenCells: 0, warnings: [] };
+  const valueRanges = contiguousSheetWriteRanges(sheetId, rowNumber, writes);
+  try {
+    await feishuFetch(`/sheets/v2/spreadsheets/${spreadsheetToken}/values_batch_update`, {
+      token,
+      method: "POST",
+      body: { valueRanges }
+    });
+    return { ok: true, writtenCells: writes.length, warnings: [] };
+  } catch (batchError) {
+    let writtenCells = 0;
+    const warnings = [];
+    for (const write of writes) {
+      const result = await writeSheetCellByColumnBestEffort(
+        token,
+        spreadsheetToken,
+        sheetId,
+        write.columnIndex,
+        rowNumber,
+        write.value,
+        write.fieldName || ""
+      );
+      if (result.ok) writtenCells += 1;
+      else warnings.push(result.message);
+    }
+    if (!writtenCells && !warnings.length) warnings.push(`批量写入失败：${shortErrorMessage(batchError)}`);
+    return { ok: warnings.length === 0, writtenCells, warnings, fallbackUsed: true };
+  }
+}
+
 function rowsToSimpleXlsx(rows, sheetName = "达人库") {
   const safeRows = Array.isArray(rows) ? rows : [];
   const columns = [];
@@ -1818,6 +1956,12 @@ function isAmbiguousCreatorTypeHeader(header) {
   return /^(博主类型|达人类型|内容类型)$/i.test(cellText(header).replace(/\s+/g, ""));
 }
 
+function isCreatorTypeLikeHeader(header, context = "") {
+  const text = `${cellText(context)}${cellText(header)}`.normalize("NFKC").replace(/\s+/g, "").toLowerCase();
+  if (!/(类型|形式|形态|格式|type|form|format)/i.test(text)) return false;
+  return !/(类目|分类|标签|价格|报价|金额|状态|等级|时间|日期|链接|网址|url|性别|地区|城市)/i.test(text);
+}
+
 function creatorTypeFromExampleValue(value) {
   const text = cellText(value).normalize("NFKC").trim().toLowerCase().replace(/\s+/g, "");
   if (!text) return "";
@@ -1836,10 +1980,12 @@ function firstNonEmptyColumnValue(values, columnIndex, dataStartIndex) {
 
 function canonicalFieldForSheetColumn(header, context, values, columnIndex, dataStartIndex) {
   const canonicalField = canonicalFieldForHeader(header, context) || canonicalFieldForHeader(`${context} / ${header}`);
-  if (!isAmbiguousCreatorTypeHeader(header)) return canonicalField;
   const exampleValue = firstNonEmptyColumnValue(values, columnIndex, dataStartIndex);
+  const exampleCreatorType = creatorTypeFromExampleValue(exampleValue);
+  if (exampleCreatorType && isCreatorTypeLikeHeader(header, context)) return "博主类型";
+  if (!isAmbiguousCreatorTypeHeader(header)) return canonicalField;
   if (!nonEmptyCell(exampleValue)) return canonicalField;
-  return creatorTypeFromExampleValue(exampleValue) ? "博主类型" : "账号类型";
+  return exampleCreatorType ? "博主类型" : "账号类型";
 }
 
 function buildSheetShape(values, headerRows = 1, startRow = 0) {
@@ -1891,7 +2037,8 @@ function rowObjectFromShape(line, columns) {
   const row = {};
   for (const column of columns) {
     if (!column.fieldName) continue;
-    const value = cellText(line[column.columnIndex]);
+    const rawValue = line[column.columnIndex];
+    const value = isSheetLinkColumn(column.fieldName, column.canonicalField) ? linkedCellText(rawValue) : cellText(rawValue);
     row[column.fieldName] = value;
     if (column.canonicalField && row[column.canonicalField] === undefined) row[column.canonicalField] = value;
   }
@@ -1996,24 +2143,42 @@ function computedValueForCanonicalField(valuesByField, canonicalField) {
   return "";
 }
 
-function canonicalBackfillValues(sourceRow, payload) {
-  const captures = payload.captures || {};
+function mergedDetailForPayload(sourceRow, payload) {
   const userId = extractPgyUserId(sourceRow);
   const sourceRaw = sourceRow?.raw_payload && typeof sourceRow.raw_payload === "object" ? sourceRow.raw_payload : {};
   const detailRaw = payload.detail?.raw_payload && typeof payload.detail.raw_payload === "object" ? payload.detail.raw_payload : {};
-  const detailRow = {
+  return {
     ...(payload.detail || {}),
     raw_payload: { ...sourceRaw, ...detailRaw },
     pgy_url: payload.detailUrl || detailUrlFromRow(sourceRow),
     profile_url: profileUrl(userId)
   };
+}
+
+function canonicalBackfillValues(sourceRow, payload) {
+  const captures = payload.captures || {};
+  const detailRow = mergedDetailForPayload(sourceRow, payload);
   const normalizedDetail = normalizeExportRow({ ...sourceRow, ...detailRow });
-  const detailValues = detailValuesForSheet(payload.detail, captures, detailStatusByCapture(captures), payload.detailUrl || "");
+  const detailValues = detailValuesForSheet(detailRow, captures, detailStatusByCapture(captures), payload.detailUrl || "");
   return { ...normalizedDetail, ...detailValues };
 }
 
 function valueForCanonicalField(valuesByField, canonicalField) {
   if (!canonicalField) return "";
+  if (canonicalField === "博主类型") {
+    for (const fieldName of [canonicalField, ...(FIELD_ALIASES[canonicalField] || [])]) {
+      const value = normalizedCreatorNoteType(valuesByField[fieldName]);
+      if (value) return value;
+    }
+    return "";
+  }
+  if (canonicalField === "笔记类型") {
+    for (const fieldName of [canonicalField, ...(FIELD_ALIASES[canonicalField] || [])]) {
+      const value = normalizedNoteTypeDisplay(valuesByField[fieldName]);
+      if (value) return value;
+    }
+    return "";
+  }
   if (valuesByField[canonicalField] !== undefined && valuesByField[canonicalField] !== null && valuesByField[canonicalField] !== "") {
     return valuesByField[canonicalField];
   }
@@ -2507,17 +2672,26 @@ function bitableScreenshotAttachmentField(fields, fieldName) {
 }
 
 function bitableCreatorTypeFieldName(fields, records) {
-  const ambiguousFields = (fields || []).filter((field) => isAmbiguousCreatorTypeHeader(bitableFieldName(field)));
-  for (const field of ambiguousFields) {
+  const semanticFields = (fields || []).filter((field) => {
+    const fieldName = bitableFieldName(field);
+    if (canonicalFieldForHeader(fieldName) === "博主类型") return true;
+    if (!isCreatorTypeLikeHeader(fieldName)) return false;
+    const exampleValue = (records || []).map((record) => record?.fields?.[fieldName]).find(nonEmptyCell);
+    return Boolean(creatorTypeFromExampleValue(exampleValue));
+  });
+  for (const field of semanticFields) {
     const fieldName = bitableFieldName(field);
     const exampleValue = (records || []).map((record) => record?.fields?.[fieldName]).find(nonEmptyCell);
     if (creatorTypeFromExampleValue(exampleValue)) return fieldName;
   }
-  const emptyField = ambiguousFields.find((field) => {
+  const explicitFormField = semanticFields.find((field) => /内容形式|笔记形式|作品形式|发布形式|媒介形式|图文.?视频/i.test(bitableFieldName(field)));
+  if (explicitFormField) return bitableFieldName(explicitFormField);
+  const emptyField = semanticFields.find((field) => {
     const fieldName = bitableFieldName(field);
     return !(records || []).some((record) => nonEmptyCell(record?.fields?.[fieldName]));
   });
   if (emptyField) return bitableFieldName(emptyField);
+  const ambiguousFields = semanticFields.filter((field) => isAmbiguousCreatorTypeHeader(bitableFieldName(field)));
   return ambiguousFields.length ? "博主类型（图文/视频）" : "博主类型";
 }
 
@@ -3573,6 +3747,13 @@ function cleanJsonText(value) {
 
 function noteCaseFromApiItem(item) {
   if (!item || typeof item !== "object") return null;
+  const noteType = normalizedCreatorNoteType(firstDefined(item.noteType, item.note_type, item.contentType, item.content_type, item.mediaType, item.media_type));
+  const booleanNoteType = typeof item.isVideo === "boolean"
+    ? (item.isVideo ? "视频" : "图文")
+    : typeof item.is_video === "boolean"
+      ? (item.is_video ? "视频" : "图文")
+      : "";
+  const normalizedNoteType = noteType || booleanNoteType;
   const note = {
     note_id: cleanJsonText(item.noteId || item.note_id || item.id),
     title: cleanJsonText(item.title || item.noteTitle || item.name),
@@ -3588,7 +3769,7 @@ function noteCaseFromApiItem(item) {
     share_count: firstDefined(item.shareNum, item.share_count, item.shareCount),
     third_read_user_count: firstDefined(item.thirdReadUserNum, item.third_read_user_count),
     is_advertise: typeof item.isAdvertise === "boolean" ? item.isAdvertise : undefined,
-    note_type: item.isVideo ? "视频笔记" : "图文笔记",
+    note_type: normalizedNoteType ? `${normalizedNoteType}笔记` : undefined,
     source: "detail_api"
   };
   for (const key of Object.keys(note)) {
@@ -3831,6 +4012,8 @@ function mergeDetailApiCache(detail, apiCache) {
     note.picture_3s_read_rate,
     ratioFromApiValue(firstDefined(dailyRate.picture3sViewRate, dailyRate.picture3sViewRate30, dailyRate.picture3sReadRate, dailyRate.pictureThreeSecondReadRate, dailyRate.pic3sReadRate, dailyRate.picture_3s_read_rate))
   );
+  note.note_count = firstDefined(note.note_count, dailyRate.noteNumber, dailyRate.noteCount, dailySummary.noteNumber, dailySummary.noteCount);
+  note.video_note_count = firstDefined(note.video_note_count, dailyRate.videoNoteNumber, dailyRate.videoNoteCount, dailySummary.videoNoteNumber, dailySummary.videoNoteCount);
 
   raw.fan_analysis = fan;
   raw.note_performance = note;
@@ -4040,6 +4223,20 @@ function detailBackfillConcurrencyForOptions(options = {}) {
   if (options.directExportFastMode) return DETAIL_BACKFILL_CONCURRENCY;
   if (DETAIL_FAST_API_MODE && !shouldCaptureFansScreenshot(options) && !shouldCaptureNoteScreenshot(options)) return 1;
   return DETAIL_BACKFILL_CONCURRENCY;
+}
+
+async function withFavoriteDetailCollectionLock(task) {
+  const previous = favoriteDetailCollectionLock;
+  let release;
+  favoriteDetailCollectionLock = new Promise((resolve) => {
+    release = resolve;
+  });
+  await previous;
+  try {
+    return await task();
+  } finally {
+    release();
+  }
 }
 
 async function withDetailCaptureLock(task) {
@@ -5139,14 +5336,10 @@ async function collectDetailPayloadFromBackgroundTab(url, index = 0, options = {
 }
 
 async function collectCurrentDetailPayload(tab, index = 0, options = {}) {
-  if (!tab?.id) throw new Error("无法定位当前达人详情页。");
+  if (!tab?.url) throw new Error("无法定位当前达人详情页。");
   const url = tab.url || "";
   const row = rowFromDetailUrl(url);
-  if (tab.id > 0) {
-    await requireDetailTab(tab.id);
-    return collectDetailPayloadFromTab(tab, row, index, url, options);
-  }
-  return collectDetailPayloadWithCooldown(row, index, options);
+  return withFavoriteDetailCollectionLock(() => collectDetailPayload(row, index, options));
 }
 
 function detailFavoriteOptions(options) {
@@ -5180,9 +5373,10 @@ function rowForDetailPayload(payload) {
 
 async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收藏") {
   const sourceRow = rowForDetailPayload(payload);
+  const mergedDetail = mergedDetailForPayload(sourceRow, payload);
   const seedValues = {
     ...sourceRow,
-    ...detailValuesForSheet(payload.detail, payload.captures || {}, actionStatus, payload.detailUrl || "")
+    ...detailValuesForSheet(mergedDetail, payload.captures || {}, actionStatus, payload.detailUrl || "")
   };
   const values = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
   const shape = effectiveSheetWidth(values)
@@ -5194,7 +5388,7 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
   const latestValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
   const latestShape = detectSheetShape(latestValues);
   const items = sheetRowsToShapeObjects(latestValues, latestShape);
-  const existing = items.find((item) => rowMatchKeys(item.row).some((key) => rowMatchKeys(sourceRow).includes(key)));
+  const existing = items.find((item) => rowsReferToSameCreator(item.row, sourceRow));
   let rowNumber = existing?.rowNumber || 0;
   let action = "updated";
   if (!rowNumber) {
@@ -5202,20 +5396,21 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
     const afterValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
     const afterShape = detectSheetShape(afterValues);
     const afterItems = sheetRowsToShapeObjects(afterValues, afterShape);
-    rowNumber = afterItems.find((item) => rowMatchKeys(item.row).some((key) => rowMatchKeys(sourceRow).includes(key)))?.rowNumber || afterValues.length;
+    rowNumber = afterItems.find((item) => rowsReferToSameCreator(item.row, sourceRow))?.rowNumber || afterValues.length;
     action = "appended";
   }
 
   const captures = payload.captures || {};
   const valuesByField = {
     ...canonicalBackfillValues(sourceRow, payload),
-    ...detailValuesForSheet(payload.detail, captures, detailStatusByCapture(captures, actionStatus, `${actionStatus}-未确认粉丝画像`), payload.detailUrl || "")
+    ...detailValuesForSheet(mergedDetail, captures, detailStatusByCapture(captures, actionStatus, `${actionStatus}-未确认粉丝画像`), payload.detailUrl || "")
   };
   const targetValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
   const targetShape = existingOnlySheetShape(targetValues);
   const rowLine = targetValues[rowNumber - 1] || [];
   let writtenCells = 0;
   const warnings = [];
+  const ordinaryWrites = [];
 
   for (const column of targetShape.columns) {
     if (isFansImageColumn(column)) {
@@ -5253,36 +5448,36 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
       } else {
         const value = readMetricValue(valuesByField);
         if (value !== undefined && value !== null && value !== "") {
-          const cellResult = await writeSheetCellByColumnBestEffort(
-            sheet.token,
-            sheet.spreadsheetToken,
-            sheet.sheetId,
-            column.columnIndex,
-            rowNumber,
+          ordinaryWrites.push({
+            columnIndex: column.columnIndex,
             value,
-            column.fieldName || column.canonicalField
-          );
-          if (cellResult.ok) writtenCells += 1;
-          else warnings.push(cellResult.message);
+            fieldName: column.fieldName || column.canonicalField
+          });
         }
       }
       continue;
     }
     if (!column.canonicalField) continue;
     const value = valueForCanonicalField(valuesByField, column.canonicalField);
-    if (value === undefined || value === null || value === "") continue;
-    const cellResult = await writeSheetCellByColumnBestEffort(
-      sheet.token,
-      sheet.spreadsheetToken,
-      sheet.sheetId,
-      column.columnIndex,
-      rowNumber,
+    const shouldClearInvalidCreatorType = column.canonicalField === "博主类型" &&
+      nonEmptyCell(rowLine[column.columnIndex]) &&
+      !creatorTypeFromExampleValue(rowLine[column.columnIndex]);
+    if ((value === undefined || value === null || value === "") && !shouldClearInvalidCreatorType) continue;
+    ordinaryWrites.push({
+      columnIndex: column.columnIndex,
       value,
-      column.fieldName || column.canonicalField
-    );
-    if (cellResult.ok) writtenCells += 1;
-    else warnings.push(cellResult.message);
+      fieldName: column.fieldName || column.canonicalField
+    });
   }
+  const batchResult = await writeSheetCellsBatchBestEffort(
+    sheet.token,
+    sheet.spreadsheetToken,
+    sheet.sheetId,
+    rowNumber,
+    ordinaryWrites
+  );
+  writtenCells += batchResult.writtenCells;
+  warnings.push(...batchResult.warnings);
   return { ok: true, resourceType: "sheet", action, rowNumber, writtenCells, warnings };
 }
 
@@ -5304,8 +5499,13 @@ async function appendDetailPayloadToBitable(target, payload) {
     ...normalizeExportRow(sourceRow),
     ...detailFields
   };
-  const existing = records.find((record) => rowMatchKeys(record.fields || {}).some((key) => rowMatchKeys(sourceRow).includes(key)));
+  const existing = records.find((record) => rowsReferToSameCreator(record.fields || {}, sourceRow));
   if (existing) {
+    const creatorTypeFieldName = bitableDetailFieldName(fieldsMeta, "博主类型");
+    const existingCreatorType = existing.fields?.[creatorTypeFieldName];
+    if (!Object.prototype.hasOwnProperty.call(fields, creatorTypeFieldName) && nonEmptyCell(existingCreatorType) && !creatorTypeFromExampleValue(existingCreatorType)) {
+      fields[creatorTypeFieldName] = "";
+    }
     await updateBitableRecord(target.token, target.parsed.token, tableId, existing.record_id || existing.id, fields);
     return { ok: true, resourceType: "bitable", action: "updated", tableId, recordId: existing.record_id || existing.id, writtenCells: Object.keys(fields).length };
   }
@@ -5354,7 +5554,177 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {}, onProgress = a
   return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
 }
 
-async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 }) {
+function favoriteTaskId() {
+  if (globalThis.crypto?.randomUUID) return `favorite-${globalThis.crypto.randomUUID()}`;
+  return `favorite-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function favoriteTaskUserId(url) {
+  return (String(url || "").match(/\/blogger-detail\/([^?/#]+)/) || [])[1] || "";
+}
+
+function pruneFavoriteTasks(tasks) {
+  const now = Date.now();
+  const ordered = Object.values(tasks || {}).sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0));
+  const active = ordered.filter((task) => !["completed", "failed"].includes(task.status));
+  const terminal = ordered.filter((task) =>
+    ["completed", "failed"].includes(task.status) && now - Number(task.updatedAt || 0) < FAVORITE_TASK_RETENTION_MS
+  );
+  const keep = new Set([
+    ...active,
+    ...terminal.slice(0, Math.max(0, FAVORITE_TASK_MAX_COUNT - active.length))
+  ].map((task) => task.taskId));
+  for (const taskId of Object.keys(tasks || {})) {
+    if (!keep.has(taskId)) delete tasks[taskId];
+  }
+}
+
+function mutateFavoriteTasks(mutator) {
+  const operation = favoriteTaskStorageLock.then(async () => {
+    const stored = await chrome.storage.local.get({ [FAVORITE_TASKS_STORAGE_KEY]: {} });
+    const tasks = stored[FAVORITE_TASKS_STORAGE_KEY] && typeof stored[FAVORITE_TASKS_STORAGE_KEY] === "object"
+      ? { ...stored[FAVORITE_TASKS_STORAGE_KEY] }
+      : {};
+    const result = await mutator(tasks);
+    pruneFavoriteTasks(tasks);
+    await chrome.storage.local.set({ [FAVORITE_TASKS_STORAGE_KEY]: tasks });
+    return result;
+  });
+  favoriteTaskStorageLock = operation.catch(() => null);
+  return operation;
+}
+
+async function updateFavoriteTask(taskId, patch = {}) {
+  return mutateFavoriteTasks((tasks) => {
+    const current = tasks[taskId];
+    if (!current) return null;
+    const now = Date.now();
+    const next = {
+      ...current,
+      ...patch,
+      taskId,
+      updatedAt: now
+    };
+    if (next.status === "running" && !next.startedAt) next.startedAt = now;
+    if (["completed", "failed"].includes(next.status)) next.finishedAt = next.finishedAt || now;
+    tasks[taskId] = next;
+    return next;
+  });
+}
+
+async function readFavoriteTask({ taskId = "", userId = "" } = {}) {
+  const stored = await chrome.storage.local.get({ [FAVORITE_TASKS_STORAGE_KEY]: {} });
+  const tasks = stored[FAVORITE_TASKS_STORAGE_KEY] && typeof stored[FAVORITE_TASKS_STORAGE_KEY] === "object"
+    ? stored[FAVORITE_TASKS_STORAGE_KEY]
+    : {};
+  if (taskId && tasks[taskId]) return tasks[taskId];
+  const cleanUserId = String(userId || "");
+  return Object.values(tasks)
+    .filter((task) => !cleanUserId || String(task.userId || "") === cleanUserId)
+    .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0] || null;
+}
+
+function publicFavoriteTask(task) {
+  if (!task) return null;
+  const { options: _options, sourceTabId: _sourceTabId, ...publicTask } = task;
+  return publicTask;
+}
+
+async function createFavoriteTask({ url, options = {}, sourceTabId = 0 }) {
+  rowFromDetailUrl(url);
+  const userId = favoriteTaskUserId(url);
+  return mutateFavoriteTasks((tasks) => {
+    const existing = Object.values(tasks)
+      .filter((task) => String(task.userId || "") === userId && ["queued", "running"].includes(task.status))
+      .sort((left, right) => Number(right.updatedAt || 0) - Number(left.updatedAt || 0))[0];
+    if (existing) {
+      if (sourceTabId) existing.sourceTabId = Number(sourceTabId);
+      existing.updatedAt = Date.now();
+      tasks[existing.taskId] = existing;
+      return existing;
+    }
+    const now = Date.now();
+    const task = {
+      taskId: favoriteTaskId(),
+      userId,
+      detailUrl: String(url || ""),
+      sourceTabId: Number(sourceTabId || 0),
+      options: options && typeof options === "object" ? options : {},
+      status: "queued",
+      step: 1,
+      progress: 12,
+      stageName: "提交任务",
+      message: "写入任务已提交",
+      createdAt: now,
+      updatedAt: now,
+      startedAt: 0,
+      finishedAt: 0,
+      result: null
+    };
+    tasks[task.taskId] = task;
+    return task;
+  });
+}
+
+async function scheduleFavoriteTask(taskId) {
+  await chrome.alarms.create(`${FAVORITE_TASK_ALARM_PREFIX}${taskId}`, {
+    delayInMinutes: 0.5,
+    periodInMinutes: 0.5
+  });
+  runFavoriteTask(taskId).catch(() => null);
+}
+
+async function queueFavoriteTask(input) {
+  const task = await createFavoriteTask(input);
+  await scheduleFavoriteTask(task.taskId);
+  return task;
+}
+
+async function runFavoriteTask(taskId) {
+  if (!taskId || runningFavoriteTaskIds.has(taskId)) return;
+  const task = await readFavoriteTask({ taskId });
+  if (!task || ["completed", "failed"].includes(task.status)) {
+    await chrome.alarms.clear(`${FAVORITE_TASK_ALARM_PREFIX}${taskId}`).catch(() => null);
+    return;
+  }
+  runningFavoriteTaskIds.add(taskId);
+  await updateFavoriteTask(taskId, {
+    status: "running",
+    step: Math.max(1, Number(task.step || 1)),
+    progress: Math.max(12, Number(task.progress || 12)),
+    stageName: task.stageName || "提交任务",
+    message: task.message || "正在执行写入任务"
+  });
+  try {
+    await startFavoriteDetailToFeishu({
+      url: task.detailUrl,
+      options: task.options || {},
+      sourceTabId: Number(task.sourceTabId || 0),
+      taskId
+    });
+  } catch (error) {
+    await updateFavoriteTask(taskId, {
+      status: "failed",
+      message: shortErrorMessage(error)
+    }).catch(() => null);
+  } finally {
+    runningFavoriteTaskIds.delete(taskId);
+    const latest = await readFavoriteTask({ taskId }).catch(() => null);
+    if (!latest || ["completed", "failed"].includes(latest.status)) {
+      await chrome.alarms.clear(`${FAVORITE_TASK_ALARM_PREFIX}${taskId}`).catch(() => null);
+    }
+  }
+}
+
+async function resumeFavoriteTasks() {
+  const stored = await chrome.storage.local.get({ [FAVORITE_TASKS_STORAGE_KEY]: {} });
+  const tasks = Object.values(stored[FAVORITE_TASKS_STORAGE_KEY] || {});
+  for (const task of tasks) {
+    if (["queued", "running"].includes(task.status)) scheduleFavoriteTask(task.taskId).catch(() => null);
+  }
+}
+
+async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0, taskId = "" }) {
   rowFromDetailUrl(url);
   detailStopRequested = false;
   const saved = await chrome.storage.local.get({
@@ -5379,9 +5749,19 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 
     currentStage = Number(step || currentStage);
     currentProgress = Number(progress || currentProgress);
     currentStageName = String(stageName || currentStageName);
+    if (taskId) {
+      await updateFavoriteTask(taskId, {
+        status: "running",
+        step: currentStage,
+        progress: currentProgress,
+        stageName: currentStageName,
+        message: String(message || "正在执行写入任务")
+      }).catch(() => null);
+    }
     if (!sourceTabId) return;
     await chrome.tabs.sendMessage(sourceTabId, {
       type: "PGY_FAVORITE_TASK_STATUS",
+      taskId,
       status: "running",
       step: currentStage,
       progress: currentProgress,
@@ -5400,9 +5780,20 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 
       "收藏写回完成",
       `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
     );
+    if (taskId) {
+      await updateFavoriteTask(taskId, {
+        status: "completed",
+        step: 4,
+        progress: 100,
+        stageName: "完成",
+        message: "达人完整数据已写入飞书",
+        result
+      }).catch(() => null);
+    }
     if (sourceTabId) {
       await chrome.tabs.sendMessage(sourceTabId, {
         type: "PGY_FAVORITE_TASK_STATUS",
+        taskId,
         status: "completed",
         step: 4,
         progress: 100,
@@ -5418,9 +5809,19 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0 
       shortErrorMessage(error),
       { requireInteraction: true }
     );
+    if (taskId) {
+      await updateFavoriteTask(taskId, {
+        status: "failed",
+        step: currentStage,
+        progress: currentProgress,
+        stageName: currentStageName,
+        message: shortErrorMessage(error)
+      }).catch(() => null);
+    }
     if (sourceTabId) {
       await chrome.tabs.sendMessage(sourceTabId, {
         type: "PGY_FAVORITE_TASK_STATUS",
+        taskId,
         status: "failed",
         step: currentStage,
         progress: currentProgress,
@@ -5513,7 +5914,7 @@ async function backfillDetailsToFeishu({ rows, options, limit = 0 }) {
         sheet.sheetId,
         sheet.fields,
         rowNumber,
-        detailValuesForSheet(payload.detail, captures, status, payload.detailUrl || "")
+        detailValuesForSheet(mergedDetailForPayload(sourceRow, payload), captures, status, payload.detailUrl || "")
       );
       if (isFansScreenshotEnabledFromCaptures(captures)) {
         await writeSheetImage(
@@ -5691,7 +6092,10 @@ async function backfillOneDetailSheet({ sheet, limit = 0, offset = 0 }) {
           continue;
         }
         const value = valueForCanonicalField(valuesByField, column.canonicalField);
-        if (value === undefined || value === null || value === "") continue;
+        const shouldClearInvalidCreatorType = column.canonicalField === "博主类型" &&
+          nonEmptyCell(item.line[column.columnIndex]) &&
+          !creatorTypeFromExampleValue(item.line[column.columnIndex]);
+        if ((value === undefined || value === null || value === "") && !shouldClearInvalidCreatorType) continue;
         const cellResult = await writeSheetCellByColumnBestEffort(
           sheet.token,
           sheet.spreadsheetToken,
@@ -5813,6 +6217,11 @@ async function backfillOneDetailBitable({ table, limit = 0, offset = 0 }) {
         valuesByField,
         captures
       });
+      const creatorTypeFieldName = bitableDetailFieldName(fieldsMeta, "博主类型");
+      const existingCreatorType = item.row[creatorTypeFieldName];
+      if (!Object.prototype.hasOwnProperty.call(fields, creatorTypeFieldName) && nonEmptyCell(existingCreatorType) && !creatorTypeFromExampleValue(existingCreatorType)) {
+        fields[creatorTypeFieldName] = "";
+      }
       if (missingScreenshots.length) {
         fields["详情补采备注"] = [fields["详情补采备注"], ...missingScreenshots].filter(Boolean).join("；");
       }
@@ -6006,7 +6415,43 @@ async function backfillDetailsFromFeishuSheet({ options, limit = 0 }) {
   };
 }
 
+const BACKGROUND_MESSAGE_TYPES = new Set([
+  "DOWNLOAD_FAVORITES_XLSX",
+  "DOWNLOAD_PGY_XLSX",
+  "DOWNLOAD_PGY_CSV",
+  "DOWNLOAD_CSV",
+  "SYNC_FEISHU_DIRECT",
+  "ENRICH_ROWS_WITH_DETAILS",
+  "VALIDATE_FEISHU_SYNC_TARGET",
+  "INSPECT_FEISHU_TABLE_CONFIG",
+  "VALIDATE_FEISHU_CREDENTIALS",
+  "VALIDATE_FEISHU_DETAIL_TARGET",
+  "BACKFILL_DETAILS_FEISHU",
+  "BACKFILL_DETAILS_FROM_FEISHU",
+  "FAVORITE_CURRENT_DETAIL",
+  "FAVORITE_DETAIL_URL",
+  "GET_FAVORITE_WRITE_TASK",
+  "ENRICH_PREFAVORITE_QUOTE",
+  "REFRESH_ALL_PREFAVORITES",
+  "RESOLVE_PGY_NOTE_LINKS",
+  "READ_ONLINE_CREATOR_TABLE",
+  "INSPECT_CREATOR_COOPERATION_COUNTS",
+  "LIST_ONLINE_CREATOR_TABLE_SHEETS",
+  "STOP_DETAIL_BACKFILL",
+  "OPEN_OPTIONS_PAGE",
+  "OPEN_FAVORITES_PAGE",
+  "OPEN_SIDE_PANEL"
+]);
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (!alarm?.name?.startsWith(FAVORITE_TASK_ALARM_PREFIX)) return;
+  runFavoriteTask(alarm.name.slice(FAVORITE_TASK_ALARM_PREFIX.length)).catch(() => null);
+});
+
+resumeFavoriteTasks().catch(() => null);
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (!BACKGROUND_MESSAGE_TYPES.has(message?.type)) return false;
   (async () => {
     if (message?.type === "DOWNLOAD_FAVORITES_XLSX") {
       const rows = Array.isArray(message.rows) ? message.rows : [];
@@ -6082,17 +6527,47 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     if (message?.type === "FAVORITE_CURRENT_DETAIL") {
-      const result = await startFavoriteCurrentDetailToFeishu({ tab: sender?.tab, options: message.options || {} });
-      sendResponse(result);
+      if (!sender?.tab?.id) throw new Error("无法定位当前达人详情页。");
+      const task = await queueFavoriteTask({
+        url: sender.tab.url || "",
+        options: message.options || {},
+        sourceTabId: sender.tab.id
+      });
+      sendResponse({
+        ok: true,
+        accepted: true,
+        completed: task.status === "completed",
+        taskId: task.taskId,
+        userId: task.userId,
+        status: task.status,
+        task: publicFavoriteTask(task)
+      });
       return;
     }
     if (message?.type === "FAVORITE_DETAIL_URL") {
-      const result = await startFavoriteDetailToFeishu({
+      const task = await queueFavoriteTask({
         url: message.detailUrl || "",
         options: message.options || {},
         sourceTabId: sender?.tab?.id || 0
       });
-      sendResponse(result);
+      sendResponse({
+        ok: true,
+        accepted: true,
+        completed: task.status === "completed",
+        taskId: task.taskId,
+        userId: task.userId,
+        status: task.status,
+        task: publicFavoriteTask(task)
+      });
+      return;
+    }
+    if (message?.type === "GET_FAVORITE_WRITE_TASK") {
+      const task = await readFavoriteTask({
+        taskId: message.taskId || "",
+        userId: message.userId || ""
+      });
+      if (task && ["queued", "running"].includes(task.status)) scheduleFavoriteTask(task.taskId).catch(() => null);
+      sendResponse({ ok: true, task: publicFavoriteTask(task) });
       return;
     }
     if (message?.type === "ENRICH_PREFAVORITE_QUOTE") {

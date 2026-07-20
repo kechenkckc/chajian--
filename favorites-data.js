@@ -16,8 +16,8 @@ const FavoriteDataTools = (() => {
     cooperationNoteCount: ["合作笔记数", "已合作笔记数", "cooperationNoteCount"],
     latestCooperationNoteId: ["最新合作笔记ID", "合作笔记ID", "笔记ID", "noteId", "latestCooperationNoteId", "latest_note_id"],
     latestCooperationNoteTitle: ["最新合作笔记标题", "合作笔记标题", "笔记标题", "latestCooperationNoteTitle", "latest_note_title"],
-    latestCooperationNotePublishedAt: ["发布时间", "笔记发布时间", "合作笔记发布时间", "最新合作笔记发布时间", "最新笔记发布时间", "latestCooperationNotePublishedAt", "latest_note_published_at"],
-    latestCooperationNoteUrl: ["发布链接", "笔记发布链接", "合作笔记发布链接", "最新合作笔记发布链接", "最新笔记链接", "小红书笔记链接", "latestCooperationNoteUrl", "latest_note_url"],
+    latestCooperationNotePublishedAt: ["发布时间", "视频发布时间", "笔记发布时间", "合作视频发布时间", "合作笔记发布时间", "最新合作笔记发布时间", "最新笔记发布时间", "latestCooperationNotePublishedAt", "latest_note_published_at"],
+    latestCooperationNoteUrl: ["发布链接", "视频链接", "合作视频链接", "笔记发布链接", "合作笔记发布链接", "最新合作笔记发布链接", "最新笔记链接", "小红书笔记链接", "latestCooperationNoteUrl", "latest_note_url"],
     cpmText: ["CPM", "合作CPM", "cpm", "cpmText"],
     cpeText: ["CPE", "合作CPE", "cpe", "cpeText"],
     bio: ["个人简介", "简介", "博主人设", "bio"],
@@ -30,6 +30,9 @@ const FavoriteDataTools = (() => {
     updatedAt: ["更新时间", "采集时间", "updatedAt"]
   };
   const KNOWN_HEADERS = new Set(Object.values(FIELD_ALIASES).flat().map(normalizeHeader));
+  const LINK_HEADERS = new Set(["avatar", "xhsUrl", "pgyUrl", "latestCooperationNoteUrl"]
+    .flatMap((field) => FIELD_ALIASES[field] || [])
+    .map(normalizeHeader));
 
   function normalizeHeader(value) {
     return String(value ?? "").trim().toLowerCase().replace(/[\s_\-—:：()（）/\\]+/g, "");
@@ -42,6 +45,27 @@ const FavoriteDataTools = (() => {
       return cellText(value.text ?? value.name ?? value.value ?? value.link ?? value.url ?? "");
     }
     return String(value).trim();
+  }
+
+  function linkedCellText(value) {
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.map(linkedCellText).filter(Boolean).join("、");
+    if (typeof value === "object") return linkedCellText(value.link ?? value.url ?? value.text ?? value.name ?? value.value ?? "");
+    return String(value).trim();
+  }
+
+  function normalizeDateCell(value) {
+    const text = cellText(value);
+    if (!text) return "";
+    if (/^\d{5}(?:\.\d+)?$/.test(text)) {
+      const serial = Number(text);
+      if (Number.isFinite(serial) && serial >= 1 && serial <= 100000) {
+        const milliseconds = Date.UTC(1899, 11, 30) + Math.round(serial * 86400000);
+        const date = new Date(milliseconds);
+        if (!Number.isNaN(date.getTime())) return date.toISOString().slice(0, 10);
+      }
+    }
+    return text;
   }
 
   function parseCsv(text) {
@@ -184,7 +208,10 @@ const FavoriteDataTools = (() => {
 
   function normalizedRow(row) {
     const values = new Map();
-    Object.entries(row || {}).forEach(([key, value]) => values.set(normalizeHeader(key), cellText(value)));
+    Object.entries(row || {}).forEach(([key, value]) => {
+      const normalizedKey = normalizeHeader(key);
+      values.set(normalizedKey, LINK_HEADERS.has(normalizedKey) ? linkedCellText(value) : cellText(value));
+    });
     return values;
   }
 
@@ -227,10 +254,13 @@ const FavoriteDataTools = (() => {
     if (!text) return null;
     const stars = (text.match(/[★⭐]/g) || []).length;
     const match = text.match(/-?\d+(?:\.\d+)?/);
-    if (stars && !match) return Math.min(5, stars);
+    if (stars && !match) return Math.min(10, stars);
     if (!match) return null;
     const number = Number(match[0]);
-    return Number.isFinite(number) ? Math.max(0, Math.min(5, number)) : null;
+    if (!Number.isFinite(number)) return null;
+    const denominator = Number((text.match(/\/\s*(5|10)(?:\D|$)/) || [])[1]);
+    const normalized = denominator === 5 ? number * 2 : number;
+    return Math.max(0, Math.min(10, normalized));
   }
 
   function objectToFavorite(row, options = {}) {
@@ -249,6 +279,9 @@ const FavoriteDataTools = (() => {
     for (const field of ["latestCooperationNoteId", "latestCooperationNoteTitle", "latestCooperationNotePublishedAt", "latestCooperationNoteUrl"]) {
       if (hasField(values, field)) record[field] = pick(values, field);
     }
+    if (Object.prototype.hasOwnProperty.call(record, "latestCooperationNotePublishedAt")) {
+      record.latestCooperationNotePublishedAt = normalizeDateCell(record.latestCooperationNotePublishedAt);
+    }
     if (hasField(values, "latestCooperationNoteUrl")) record.latestCooperationNoteSourceUrl = pick(values, "latestCooperationNoteUrl");
     const customTagColumn = String(options.customTagColumn || "").trim();
     const customTagTexts = customTagColumn
@@ -261,7 +294,7 @@ const FavoriteDataTools = (() => {
     if (importedRating !== null) {
       record.rating = {
         value: importedRating,
-        max: 5,
+        max: 10,
         display: options.ratingDisplay === "score" ? "score" : "stars",
         columnName: ratingColumn
       };
@@ -326,9 +359,9 @@ const FavoriteDataTools = (() => {
     const extraFields = { ...(item.customFields || {}) };
     const ratingColumn = String(item.rating?.columnName || "达人评分").trim();
     if (item.rating?.value !== undefined && item.rating?.value !== null) {
-      const fullStars = Math.max(0, Math.min(5, Math.floor(item.rating.value)));
+      const fullStars = Math.max(0, Math.min(10, Math.floor(item.rating.value)));
       extraFields[ratingColumn] = item.rating.display === "stars"
-        ? `${"★".repeat(fullStars)}${"☆".repeat(5 - fullStars)} · ${item.rating.value}/5`
+        ? `${"★".repeat(fullStars)}${"☆".repeat(10 - fullStars)} · ${item.rating.value}/10`
         : item.rating.value;
     }
     return {
