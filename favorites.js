@@ -669,6 +669,8 @@ function normalizeFavorites(items) {
       latestCooperationNoteLinkError: String(item?.latestCooperationNoteLinkError || "").trim(),
       cpmText: String(item?.cpmText ?? item?.cpm ?? item?.CPM ?? "").trim(),
       cpeText: String(item?.cpeText ?? item?.cpe ?? item?.CPE ?? "").trim(),
+      contentForm: String(item?.contentForm || item?.noteType || item?.note_type || "").trim(),
+      categoryText: String(item?.categoryText || (isOfficialCategorySource(categorySource) ? normalizeTagList(item?.categoryTags).join("；") : "")).trim(),
       quoteStatus: String(item?.quoteStatus || "").trim(),
       bio: sanitizeBio(item?.bio),
       categoryTags: officialCategoryTags,
@@ -1673,7 +1675,7 @@ async function applyTagsToSelected(providedTags = null) {
 async function editFavoriteTags(userId) {
   const item = favorites.find((favorite) => favorite.userId === userId);
   if (!item) return;
-  const value = window.prompt("编辑用户标签 / 达人类型（多个值可用逗号或顿号分隔，清空表示移除全部）", (item.customTags || []).join("、"));
+  const value = window.prompt("编辑用户标签（多个值可用逗号或顿号分隔，清空表示移除全部）", (item.customTags || []).join("、"));
   if (value === null) return;
   const customTags = normalizeTagList(value);
   tagLibrary = normalizeTagList([...tagLibrary, ...customTags], 200);
@@ -1752,6 +1754,7 @@ function favoriteToFeishuRow(item) {
   const followersCount = parsePriceValue(item.followersCount ?? item.followersText);
   const followersInWan = followersCount === null ? "" : Math.round((followersCount / 10000) * 10000) / 10000;
   const extraFields = { ...(item.customFields || {}) };
+  const creatorCategory = item.categoryText || (item.categoryTags || []).join("、");
   if (item.rating) extraFields[item.rating.columnName || "达人评分"] = item.rating.value;
   return {
     "达人ID": `pgy-api:${item.userId}`,
@@ -1769,6 +1772,7 @@ function favoriteToFeishuRow(item) {
     "视频报价": item.videoPriceText || "",
     "CPM": performance.cpm ?? "",
     "CPE": performance.cpe ?? "",
+    "内容形式": item.contentForm || "",
     "标签": (item.customTags || []).join("、"),
     "达人标签": (item.customTags || []).join("、"),
     "自定义标签": (item.customTags || []).join("、"),
@@ -1778,8 +1782,10 @@ function favoriteToFeishuRow(item) {
     "已合作笔记数": item.cooperationNoteCount || "",
     "发布时间": item.latestCooperationNotePublishedAt || "",
     "发布链接": item.latestCooperationNoteUrl || "",
-    "账号类型": (item.categoryTags || []).join("、"),
-    "内容类目": (item.categoryTags || []).join("、"),
+    "账号类型": creatorCategory,
+    "达人类型": creatorCategory,
+    "达人类目": creatorCategory,
+    "内容类目": creatorCategory,
     "IP城市": item.location || "",
     "数据来源": "xhs_profile_prefavorite",
     "采集时间": formatTime(collectedAt),

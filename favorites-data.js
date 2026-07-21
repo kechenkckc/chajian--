@@ -20,9 +20,10 @@ const FavoriteDataTools = (() => {
     latestCooperationNoteUrl: ["发布链接", "视频链接", "合作视频链接", "笔记发布链接", "合作笔记发布链接", "最新合作笔记发布链接", "最新笔记链接", "小红书笔记链接", "latestCooperationNoteUrl", "latest_note_url"],
     cpmText: ["CPM", "合作CPM", "cpm", "cpmText"],
     cpeText: ["CPE", "合作CPE", "cpe", "cpeText"],
+    contentForm: ["内容形式", "笔记类型", "作品形式", "发布形式", "contentForm", "noteType", "note_type"],
     bio: ["个人简介", "简介", "博主人设", "bio"],
-    categoryTags: ["内容类目", "蒲公英类目", "官方类目", "categoryTags"],
-    customTags: ["标签", "达人标签", "达人类型", "账号类型", "内容类型", "类目", "分类", "自定义标签", "用户标签", "用户达人类型", "tags", "tag", "customTags"],
+    categoryTags: ["达人类型", "达人类目", "内容类型", "内容类目", "账号类型", "蒲公英类目", "官方类目", "categoryTags"],
+    customTags: ["达人标签", "标签", "自定义标签", "用户标签", "用户达人类型", "tags", "tag", "customTags"],
     xhsUrl: ["主页链接", "小红书主页", "小红书链接", "xhsUrl", "profile_url"],
     pgyUrl: ["蒲公英链接", "蒲公英主页", "pgyUrl", "pgy_url"],
     status: ["达人库状态", "状态", "详情补采状态", "status"],
@@ -272,7 +273,7 @@ const FavoriteDataTools = (() => {
     const record = { userId, source: "spreadsheet_import", updatedAt: new Date().toISOString() };
     const acquisitionSource = row?.__favoriteAcquisitionSource || options.acquisitionSource;
     if (acquisitionSource?.key) record.acquisitionSources = [{ ...acquisitionSource }];
-    for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "cooperationExposureMedian", "cooperationReadMedian", "cooperationInteractionMedian", "cooperationCount", "cooperationNoteCount", "cpmText", "cpeText", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
+    for (const field of ["name", "avatar", "redId", "location", "followersText", "likesText", "picturePriceText", "videoPriceText", "cooperationExposureMedian", "cooperationReadMedian", "cooperationInteractionMedian", "cooperationCount", "cooperationNoteCount", "cpmText", "cpeText", "contentForm", "bio", "xhsUrl", "pgyUrl", "status", "createdAt", "updatedAt"]) {
       const value = pick(values, field);
       if (value) record[field] = value;
     }
@@ -289,6 +290,12 @@ const FavoriteDataTools = (() => {
       : FIELD_ALIASES.customTags.map((alias) => values.get(normalizeHeader(alias)) || "");
     const customTags = splitTags(customTagTexts.filter(Boolean).join("、"));
     if (customTags.length) record.customTags = customTags;
+    const categoryText = FIELD_ALIASES.categoryTags.map((alias) => values.get(normalizeHeader(alias)) || "").find(Boolean) || "";
+    if (categoryText) {
+      record.categoryText = categoryText;
+      record.categoryTags = splitTags(categoryText);
+      record.categorySource = "pgy_profile";
+    }
     const ratingColumn = String(options.ratingColumn || "").trim();
     const importedRating = ratingColumn ? ratingValue(values.get(normalizeHeader(ratingColumn))) : null;
     if (importedRating !== null) {
@@ -384,9 +391,10 @@ const FavoriteDataTools = (() => {
       "发布链接": item.latestCooperationNoteUrl || "",
       "CPM": item.cpmText || item.cpm || "",
       "CPE": item.cpeText || item.cpe || "",
-      "内容类目": (item.categoryTags || []).join("、"),
-      "标签": (item.customTags || []).join("、"),
-      "达人类型": (item.customTags || []).join("、"),
+      "内容形式": item.contentForm || "",
+      "内容类目": item.categoryText || (item.categoryTags || []).join("、"),
+      "达人标签": (item.customTags || []).join("、"),
+      "达人类型": item.categoryText || (item.categoryTags || []).join("、"),
       "个人简介": item.bio || "",
       "小红书主页": item.xhsUrl || "",
       "蒲公英主页": item.pgyUrl || "",
