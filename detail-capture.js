@@ -1492,24 +1492,26 @@
       node.remove();
     }
     clickDetailTab(kind);
-    await sleep(900);
+    await sleep(250);
     const started = Date.now();
+    const keys = kind === "overview" ? OVERVIEW_TEXTS : AUDIENCE_TEXTS;
     let target = findSectionElement(kind);
-    while (Date.now() - started < 9000) {
+    while (Date.now() - started < 5000) {
       target = findSectionElement(kind);
-      const keys = kind === "overview" ? OVERVIEW_TEXTS : AUDIENCE_TEXTS;
-      const score = keys.reduce((total, key) => total + (targetText(target).includes(key) ? 1 : 0), 0);
-      if (score >= 2) break;
-      await sleep(WAIT_STEP_MS);
+      const text = targetText(target);
+      const rect = targetRect(target);
+      const score = keys.reduce((total, key) => total + (text.includes(key) ? 1 : 0), 0);
+      if (score >= 1 && rect?.width >= 220 && rect?.height >= 100) break;
+      await sleep(200);
     }
     targetElement(target).scrollIntoView({ block: "start", inline: "nearest", behavior: "instant" });
     window.scrollBy(0, -96);
-    await sleep(800);
+    await sleep(200);
     target = findSectionElement(kind);
     let rect = targetRect(target);
     if (!rect || rect.y < 80) {
       targetElement(target).scrollIntoView({ block: "center", inline: "nearest", behavior: "instant" });
-      await sleep(500);
+      await sleep(200);
       target = findSectionElement(kind);
       rect = targetRect(target);
     }

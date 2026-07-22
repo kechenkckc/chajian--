@@ -41,6 +41,26 @@ const DETAIL_FIELDS = [
   "详情补采备注"
 ];
 const DETAIL_BACKFILL_FIELDS = [...DETAIL_FIELDS, "账号类型"];
+const COOPERATION_PREFETCH_FIELD_KINDS = {
+  data_summary: new Set([
+    "曝光中位数（合作）",
+    "阅读中位数（合作）",
+    "互动中位数（合作）",
+    "合作订单数",
+    "已合作笔记数"
+  ]),
+  notes_rate: new Set([
+    "曝光中位数（合作）",
+    "阅读中位数（合作）",
+    "互动中位数（合作）"
+  ]),
+  notes_detail: new Set([
+    "最新合作笔记ID",
+    "最新合作笔记标题",
+    "最新合作笔记发布时间",
+    "最新合作笔记发布链接"
+  ])
+};
 
 let tokenCache = {
   appId: "",
@@ -3271,22 +3291,24 @@ async function putBitableScreenshotAttachment(fields, { token, appToken, fieldsM
 
 async function bitableDetailFieldsWithAttachments({ token, appToken, fieldsMeta, valuesByField, captures }) {
   const fields = bitableBaseDetailFields(valuesByField, captures, fieldsMeta);
-  await putBitableScreenshotAttachment(fields, {
-    token,
-    appToken,
-    fieldsMeta,
-    fieldName: DETAIL_FIELDS[6],
-    kind: "audience",
-    capture: captures?.audience
-  });
-  await putBitableScreenshotAttachment(fields, {
-    token,
-    appToken,
-    fieldsMeta,
-    fieldName: DETAIL_FIELDS[7],
-    kind: "overview",
-    capture: captures?.overview
-  });
+  await Promise.all([
+    putBitableScreenshotAttachment(fields, {
+      token,
+      appToken,
+      fieldsMeta,
+      fieldName: DETAIL_FIELDS[6],
+      kind: "audience",
+      capture: captures?.audience
+    }),
+    putBitableScreenshotAttachment(fields, {
+      token,
+      appToken,
+      fieldsMeta,
+      fieldName: DETAIL_FIELDS[7],
+      kind: "overview",
+      capture: captures?.overview
+    })
+  ]);
   return fields;
 }
 
@@ -3421,6 +3443,7 @@ async function resolveFeishuSheet(options, rows) {
 function collectionRequirementsForFields(fields = []) {
   const detailFieldSet = new Set(DETAIL_FIELDS);
   const detectedDetailFields = [];
+  const cooperationPrefetchKinds = new Set();
   let captureFansScreenshot = false;
   let captureNoteScreenshot = false;
 
@@ -3428,6 +3451,9 @@ function collectionRequirementsForFields(fields = []) {
     const fieldName = String(field?.fieldName || field?.name || "").trim();
     const canonicalField = String(field?.canonicalField || canonicalFieldForHeader(fieldName) || "").trim();
     const normalizedName = normalizeKey(fieldName);
+    for (const [kind, fieldSet] of Object.entries(COOPERATION_PREFETCH_FIELD_KINDS)) {
+      if (fieldSet.has(canonicalField)) cooperationPrefetchKinds.add(kind);
+    }
     const isFansScreenshot = canonicalField === DETAIL_FIELDS[6] || (normalizedName.includes("粉丝画像") && normalizedName.includes("截图"));
     const isNoteScreenshot = canonicalField === DETAIL_FIELDS[7] || (normalizedName.includes("笔记数据") && normalizedName.includes("截图"));
     if (isFansScreenshot) captureFansScreenshot = true;
@@ -3440,6 +3466,7 @@ function collectionRequirementsForFields(fields = []) {
   return {
     collectionMode: detectedDetailFields.length ? "detail" : "fast",
     detectedDetailFields,
+    cooperationPrefetchKinds: Array.from(cooperationPrefetchKinds),
     detailCaptureFansScreenshot: captureFansScreenshot,
     detailCaptureNoteScreenshot: captureNoteScreenshot
   };
@@ -3461,8 +3488,36 @@ function applyCollectionRequirements(options, requirements = {}) {
   return {
     ...(options || {}),
     collectionMode: requirements.collectionMode === "detail" ? "detail" : "fast",
+    detectedDetailFields: Array.isArray(requirements.detectedDetailFields) ? requirements.detectedDetailFields : [],
+    cooperationPrefetchKinds: Array.isArray(requirements.cooperationPrefetchKinds) ? requirements.cooperationPrefetchKinds : [],
     detailCaptureFansScreenshot: Boolean(requirements.detailCaptureFansScreenshot),
     detailCaptureNoteScreenshot: Boolean(requirements.detailCaptureNoteScreenshot)
+  };
+}
+
+function cooperationPrefetchKindsForOptions(options = {}) {
+  if (Array.isArray(options.cooperationPrefetchKinds)) return options.cooperationPrefetchKinds;
+  return ["data_summary", "notes_rate", "notes_detail"];
+}
+
+function createTimingRecorder() {
+  const startedAt = Date.now();
+  const phases = {};
+  return {
+    async measure(name, operation) {
+      const phaseStartedAt = Date.now();
+      try {
+        return await operation();
+      } finally {
+        phases[name] = (phases[name] || 0) + (Date.now() - phaseStartedAt);
+      }
+    },
+    add(name, durationMs) {
+      phases[name] = (phases[name] || 0) + Math.max(0, Number(durationMs) || 0);
+    },
+    snapshot(extra = {}) {
+      return { totalMs: Date.now() - startedAt, phases: { ...phases }, ...extra };
+    }
   };
 }
 
@@ -4432,7 +4487,7 @@ async function capturePreparedTab(tab, kind, row, index) {
         screenshotSkipped: true
       };
     }
-    await new Promise((resolve) => setTimeout(resolve, 350));
+    await new Promise((resolve) => setTimeout(resolve, 120));
     try {
       const screenshot = useDebuggerScreenshot
         ? await captureTabScreenshotWithFallback(tab, prepared)
@@ -4590,17 +4645,17 @@ async function readReusableDetailApiCache(tabId) {
   return result?.result || { ok: false, cache: {}, responses: [] };
 }
 
-async function prefetchDetailBusinessData(tabId, business = "cooperation") {
+async function prefetchDetailBusinessData(tabId, business = "cooperation", requiredKinds = []) {
   const [result] = await chrome.scripting.executeScript({
     target: { tabId },
     world: "MAIN",
-    func: async (targetBusiness) => {
+    func: async (targetBusiness, targetKinds) => {
       if (typeof window.__PGY_DETAIL_API_PREFETCH__ !== "function") {
         return { ok: false, skipped: true, message: "详情页未捕获到可复用的合作笔记请求模板" };
       }
-      return window.__PGY_DETAIL_API_PREFETCH__(targetBusiness);
+      return window.__PGY_DETAIL_API_PREFETCH__(targetBusiness, targetKinds);
     },
-    args: [business]
+    args: [business, requiredKinds]
   });
   return result?.result || { ok: false, skipped: true };
 }
@@ -5288,35 +5343,39 @@ async function collectDetailPayloadWithReusableTab(row, index, options = {}) {
 }
 
 async function collectDetailPayloadFromTab(tab, row, index, url, options = {}) {
-  await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["detail-capture.js"] });
-  const result = await chrome.tabs.sendMessage(tab.id, { type: "PGY_COLLECT_DETAIL" });
+  const timing = options.timingRecorder || createTimingRecorder();
+  await timing.measure("injectCollectorMs", () => chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["detail-capture.js"] }));
+  const result = await timing.measure("domCollectionMs", () => chrome.tabs.sendMessage(tab.id, { type: "PGY_COLLECT_DETAIL" }));
   if (!result?.ok) {
     const error = new Error(result?.message || "详情页采集失败");
     error.paused = Boolean(result?.paused);
     error.authRequired = Boolean(result?.authRequired);
     throw error;
   }
-  const prefetch = await prefetchDetailBusinessData(tab.id, "cooperation").catch((error) => ({
-    ok: false,
-    message: error?.message || String(error)
-  }));
-  const apiCache = await readDetailApiCache(tab.id);
   const currentUserId = extractPgyUserId(row);
-  const currentProfile = apiCache?.cache?.blogger_profile || {};
-  const listProfile = await fetchBloggerListProfileFromTab(
+  const cooperationKinds = cooperationPrefetchKindsForOptions(options);
+  const prefetchPromise = cooperationKinds.length
+    ? timing.measure("cooperationPrefetchMs", () => prefetchDetailBusinessData(tab.id, "cooperation", cooperationKinds)).catch((error) => ({
+      ok: false,
+      message: error?.message || String(error)
+    }))
+    : Promise.resolve({ ok: true, skipped: true, reason: "target_has_no_cooperation_fields", fetched: [], errors: [] });
+  const listProfilePromise = timing.measure("listProfileLookupMs", () => fetchBloggerListProfileFromTab(
     tab.id,
     currentUserId,
-    currentProfile.name || result.detail?.nickname || ""
-  ).catch(() => null);
+    result.detail?.nickname || ""
+  )).catch(() => null);
+  const [prefetch, listProfile] = await Promise.all([prefetchPromise, listProfilePromise]);
+  const apiCache = await timing.measure("apiCacheWaitMs", () => readDetailApiCache(tab.id));
   if (listProfile) {
     apiCache.cache = apiCache.cache || {};
     apiCache.cache.blogger_list_profile = listProfile;
   }
   const audience = shouldCaptureFansScreenshot(options)
-    ? await capturePreparedTab(tab, "audience", row, index)
+    ? await timing.measure("fansScreenshotMs", () => capturePreparedTab(tab, "audience", row, index))
     : skippedAudienceCapture();
   const overview = shouldCaptureNoteScreenshot(options)
-    ? await capturePreparedTab(tab, "overview", row, index)
+    ? await timing.measure("noteScreenshotMs", () => capturePreparedTab(tab, "overview", row, index))
     : skippedOverviewCapture();
   const textDetail = {
     ...(result.detail || {}),
@@ -5336,21 +5395,23 @@ async function collectDetailPayloadFromTab(tab, row, index, url, options = {}) {
     detail,
     captures: { audience, overview },
     detailUrl: url || result.url || "",
+    timings: timing.snapshot(),
     imageName: `pgy-detail-${extractPgyUserId(row) || index + 1}.png`
   };
 }
 
 async function collectDetailPayload(row, index, options = {}) {
+  const timing = options.timingRecorder || createTimingRecorder();
   const url = detailUrlFromRow(row);
   if (!url) throw new Error("该行缺少蒲公英达人链接或达人ID。");
   const currentTabs = await chrome.tabs.query({ active: true, currentWindow: true }).catch(() => []);
   const previousTabId = currentTabs[0]?.id;
-  const tab = await withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: !DETAIL_HEADLESS_MODE }));
+  const tab = await timing.measure("createDetailTabMs", () => withDetailOpenTabStagger(() => chrome.tabs.create({ url, active: !DETAIL_HEADLESS_MODE })));
   let keepTabOpen = false;
   try {
-    await waitForTabComplete(tab.id);
-    await requireDetailTab(tab.id);
-    return await collectDetailPayloadFromTab(tab, row, index, url, options);
+    await timing.measure("waitDetailTabMs", () => waitForTabComplete(tab.id));
+    await timing.measure("validateDetailTabMs", () => requireDetailTab(tab.id));
+    return await collectDetailPayloadFromTab(tab, row, index, url, { ...options, timingRecorder: timing });
   } catch (error) {
     if (isDetailAuthError(error)) {
       keepTabOpen = true;
@@ -5367,7 +5428,7 @@ async function collectDetailPayload(row, index, options = {}) {
     throw error;
   } finally {
     if (!keepTabOpen) {
-      await chrome.tabs.remove(tab.id).catch(() => null);
+      await timing.measure("closeDetailTabMs", () => chrome.tabs.remove(tab.id)).catch(() => null);
       if (!DETAIL_HEADLESS_MODE && previousTabId) {
         await withDetailCaptureLock(() => chrome.tabs.update(previousTabId, { active: true }).catch(() => null));
       }
@@ -5454,24 +5515,29 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
     ...sourceRow,
     ...detailValuesForSheet(mergedDetail, payload.captures || {}, actionStatus, payload.detailUrl || "")
   };
-  const values = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+  const timing = payload.timingRecorder || createTimingRecorder();
+  const values = await timing.measure("sheetInitialReadMs", () => readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId));
   const shape = effectiveSheetWidth(values)
     ? existingOnlySheetShape(values)
     : await (async () => {
-      await writeSheetHeader(sheet.token, sheet.spreadsheetToken, sheet.sheetId, [seedValues]);
+      await timing.measure("sheetHeaderWriteMs", () => writeSheetHeader(sheet.token, sheet.spreadsheetToken, sheet.sheetId, [seedValues]));
       return referenceExportShape();
     })();
-  const latestValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+  const latestValues = effectiveSheetWidth(values)
+    ? values
+    : await timing.measure("sheetPostHeaderReadMs", () => readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId));
   const latestShape = detectSheetShape(latestValues);
   const items = sheetRowsToShapeObjects(latestValues, latestShape);
   const existing = items.find((item) => rowsReferToSameCreator(item.row, sourceRow));
+  let targetValues = latestValues;
   let rowNumber = existing?.rowNumber || 0;
   let action = "updated";
   if (!rowNumber) {
-    await appendMappedSheetRows(sheet.token, sheet.spreadsheetToken, sheet.sheetId, shape, [seedValues]);
-    const afterValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
+    await timing.measure("sheetAppendMs", () => appendMappedSheetRows(sheet.token, sheet.spreadsheetToken, sheet.sheetId, shape, [seedValues]));
+    const afterValues = await timing.measure("sheetPostAppendReadMs", () => readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId));
     const afterShape = detectSheetShape(afterValues);
     const afterItems = sheetRowsToShapeObjects(afterValues, afterShape);
+    targetValues = afterValues;
     rowNumber = afterItems.find((item) => rowsReferToSameCreator(item.row, sourceRow))?.rowNumber || afterValues.length;
     action = "appended";
   }
@@ -5481,18 +5547,18 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
     ...canonicalBackfillValues(sourceRow, payload),
     ...detailValuesForSheet(mergedDetail, captures, detailStatusByCapture(captures, actionStatus, `${actionStatus}-未确认粉丝画像`), payload.detailUrl || "")
   };
-  const targetValues = await readSheetValuesFlexible(sheet.token, sheet.spreadsheetToken, sheet.sheetId);
   const targetShape = existingOnlySheetShape(targetValues);
   const rowLine = targetValues[rowNumber - 1] || [];
   let writtenCells = 0;
   const warnings = [];
   const ordinaryWrites = [];
+  const imageWrites = [];
 
   for (const column of targetShape.columns) {
     if (isFansImageColumn(column)) {
       if (!isFansScreenshotEnabledFromCaptures(captures)) continue;
       if (captures.audience?.screenshot) {
-        const imageResult = await writeSheetImageByColumnBestEffort(
+        imageWrites.push(() => writeSheetImageByColumnBestEffort(
           sheet.token,
           sheet.spreadsheetToken,
           sheet.sheetId,
@@ -5500,9 +5566,7 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
           rowNumber,
           captures.audience.screenshot,
           captures.audience.imageName
-        );
-        if (imageResult.ok) writtenCells += 1;
-        else warnings.push(`粉丝画像截图未写入：${imageResult.message}`);
+        ).then((imageResult) => ({ imageResult, kind: "audience" })));
       }
       continue;
     }
@@ -5510,7 +5574,7 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
       const usesImage = columnUsesImageTemplate(column, { line: rowLine });
       if (usesImage && !isNoteScreenshotEnabledFromCaptures(captures)) continue;
       if (usesImage && captures.overview?.screenshot) {
-        const imageResult = await writeSheetImageByColumnBestEffort(
+        imageWrites.push(() => writeSheetImageByColumnBestEffort(
           sheet.token,
           sheet.spreadsheetToken,
           sheet.sheetId,
@@ -5518,9 +5582,7 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
           rowNumber,
           captures.overview.screenshot,
           captures.overview.imageName
-        );
-        if (imageResult.ok) writtenCells += 1;
-        else warnings.push(`笔记数据截图未写入：${imageResult.message}`);
+        ).then((imageResult) => ({ imageResult, kind: "overview" })));
       } else {
         const value = readMetricValue(valuesByField);
         if (value !== undefined && value !== null && value !== "") {
@@ -5542,47 +5604,56 @@ async function writeDetailPayloadToSheet(sheet, payload, actionStatus = "已收�
       fieldName: column.fieldName || column.canonicalField
     });
   }
-  const batchResult = await writeSheetCellsBatchBestEffort(
-    sheet.token,
-    sheet.spreadsheetToken,
-    sheet.sheetId,
-    rowNumber,
-    ordinaryWrites
-  );
+  const [imageResults, batchResult] = await Promise.all([
+    timing.measure("sheetImageWriteMs", () => Promise.all(imageWrites.map((write) => write()))),
+    timing.measure("sheetBatchWriteMs", () => writeSheetCellsBatchBestEffort(
+      sheet.token,
+      sheet.spreadsheetToken,
+      sheet.sheetId,
+      rowNumber,
+      ordinaryWrites
+    ))
+  ]);
+  for (const { imageResult, kind } of imageResults) {
+    if (imageResult.ok) writtenCells += 1;
+    else warnings.push(`${kind === "audience" ? "粉丝画像" : "笔记数据"}截图未写入：${imageResult.message}`);
+  }
   writtenCells += batchResult.writtenCells;
   warnings.push(...batchResult.warnings);
-  return { ok: true, resourceType: "sheet", action, rowNumber, writtenCells, warnings };
+  return { ok: true, resourceType: "sheet", action, rowNumber, writtenCells, warnings, timings: timing.snapshot() };
 }
 
 async function appendDetailPayloadToBitable(target, payload) {
-  const tableId = await chooseBitableTable(target.token, target.parsed.token, target.options.detailFeishuSheetId || target.parsed.tableId || "");
-  await ensureBitableFieldNames(target.token, target.parsed.token, tableId, STANDARD_FIELDS);
-  const records = await readBitableRecords(target.token, target.parsed.token, tableId);
-  const fieldsMeta = await ensureBitableDetailFields(target.token, target.parsed.token, tableId, records);
+  const timing = payload.timingRecorder || createTimingRecorder();
+  const tableId = await timing.measure("bitableChooseTableMs", () => chooseBitableTable(target.token, target.parsed.token, target.options.detailFeishuSheetId || target.parsed.tableId || ""));
+  await timing.measure("bitableEnsureBaseFieldsMs", () => ensureBitableFieldNames(target.token, target.parsed.token, tableId, STANDARD_FIELDS));
+  const records = await timing.measure("bitableReadRecordsMs", () => readBitableRecords(target.token, target.parsed.token, tableId));
+  const fieldsMeta = await timing.measure("bitableEnsureDetailFieldsMs", () => ensureBitableDetailFields(target.token, target.parsed.token, tableId, records));
   const sourceRow = rowForDetailPayload(payload);
   const valuesByField = canonicalBackfillValues(sourceRow, payload);
-  const detailFields = await bitableDetailFieldsWithAttachments({
+  const detailFields = await timing.measure("bitableAttachmentUploadMs", () => bitableDetailFieldsWithAttachments({
     token: target.token,
     appToken: target.parsed.token,
     fieldsMeta,
     valuesByField,
     captures: payload.captures || {}
-  });
+  }));
   const fields = {
     ...normalizeExportRow(sourceRow),
     ...detailFields
   };
   const existing = records.find((record) => rowsReferToSameCreator(record.fields || {}, sourceRow));
   if (existing) {
-    await updateBitableRecord(target.token, target.parsed.token, tableId, existing.record_id || existing.id, fields);
-    return { ok: true, resourceType: "bitable", action: "updated", tableId, recordId: existing.record_id || existing.id, writtenCells: Object.keys(fields).length };
+    await timing.measure("bitableRecordWriteMs", () => updateBitableRecord(target.token, target.parsed.token, tableId, existing.record_id || existing.id, fields));
+    return { ok: true, resourceType: "bitable", action: "updated", tableId, recordId: existing.record_id || existing.id, writtenCells: Object.keys(fields).length, timings: timing.snapshot() };
   }
-  const result = await appendBitableRecords(target.token, target.parsed.token, tableId, Object.keys(fields), [fields]);
-  return { ok: true, resourceType: "bitable", action: "appended", tableId, writtenCount: result.writtenCount };
+  const result = await timing.measure("bitableRecordWriteMs", () => appendBitableRecords(target.token, target.parsed.token, tableId, Object.keys(fields), [fields]));
+  return { ok: true, resourceType: "bitable", action: "appended", tableId, writtenCount: result.writtenCount, timings: timing.snapshot() };
 }
 
 async function favoriteCurrentDetailToFeishu({ tab, options = {}, onProgress = async () => {} }) {
-  const saved = await chrome.storage.local.get({
+  const timing = createTimingRecorder();
+  const saved = await timing.measure("loadFavoriteOptionsMs", () => chrome.storage.local.get({
     feishuAppId: "",
     feishuAppSecret: "",
     feishuUrl: "",
@@ -5594,32 +5665,37 @@ async function favoriteCurrentDetailToFeishu({ tab, options = {}, onProgress = a
     detailTraverseAllSheets: false,
     detailCaptureFansScreenshot: true,
     detailCaptureNoteScreenshot: true
-  });
+  }));
   const mergedOptions = detailFavoriteOptions({ ...saved, ...(options || {}) });
   const appId = mergedOptions.feishuAppId;
   const appSecret = mergedOptions.feishuAppSecret;
   const feishuUrl = mergedOptions.detailFeishuUrl;
   if (!appId || !appSecret || !feishuUrl) throw new Error("请先配置飞书 App ID、App Secret，并选择收藏目标表、详情表或同步表。");
-  const token = await tenantToken(appId, appSecret);
-  const parsed = await resolveWikiTarget(parseFeishuUrl(feishuUrl), token);
+  const token = await timing.measure("feishuTokenMs", () => tenantToken(appId, appSecret));
+  const parsed = await timing.measure("resolveFeishuTargetMs", () => resolveWikiTarget(parseFeishuUrl(feishuUrl), token));
   if (parsed.resourceType === "bitable") {
-    const tableId = await chooseBitableTable(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.tableId || "");
-    const requirements = collectionRequirementsForFields((await listBitableFields(token, parsed.token, tableId)).map((field) => ({
+    const tableId = await timing.measure("inspectTargetTableMs", () => chooseBitableTable(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.tableId || ""));
+    const requirements = collectionRequirementsForFields((await timing.measure("inspectTargetFieldsMs", () => listBitableFields(token, parsed.token, tableId))).map((field) => ({
       fieldName: bitableFieldName(field)
     })));
-    const targetOptions = applyCollectionRequirements({ ...mergedOptions, detailFeishuSheetId: tableId }, requirements);
+    const targetOptions = { ...applyCollectionRequirements({ ...mergedOptions, detailFeishuSheetId: tableId }, requirements), timingRecorder: timing };
     await onProgress({ step: 2, progress: 45, stageName: "从蒲公英抓取", message: "正在从蒲公英抓取达人完整详情" });
-    const payload = await collectCurrentDetailPayload(tab, 0, targetOptions);
+    const payload = await timing.measure("detailCollectionMs", () => collectCurrentDetailPayload(tab, 0, targetOptions));
+    payload.timingRecorder = timing;
     await onProgress({ step: 3, progress: 78, stageName: "写入飞书", message: "达人详情抓取完成，正在写入飞书多维表格" });
-    return appendDetailPayloadToBitable({ token, parsed, options: targetOptions }, payload);
+    const result = await timing.measure("feishuWriteMs", () => appendDetailPayloadToBitable({ token, parsed, options: targetOptions }, payload));
+    return { ...result, timings: timing.snapshot({ screenshots: { fans: shouldCaptureFansScreenshot(targetOptions), note: shouldCaptureNoteScreenshot(targetOptions) } }) };
   }
   if (parsed.resourceType !== "sheet") throw new Error("收藏写回当前支持飞书电子表格或多维表格。");
-  const sheetId = await chooseSheet(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.sheetId || "");
-  const requirements = collectionRequirementsForSheetValues(await readSheetValues(token, parsed.token, sheetId, "A1:ZZ20"));
+  const sheetId = await timing.measure("inspectTargetSheetMs", () => chooseSheet(token, parsed.token, mergedOptions.detailFeishuSheetId || parsed.sheetId || ""));
+  const requirements = collectionRequirementsForSheetValues(await timing.measure("inspectTargetFieldsMs", () => readSheetValues(token, parsed.token, sheetId, "A1:ZZ20")));
+  const targetOptions = { ...applyCollectionRequirements(mergedOptions, requirements), timingRecorder: timing };
   await onProgress({ step: 2, progress: 45, stageName: "从蒲公英抓取", message: "正在从蒲公英抓取达人完整详情" });
-  const payload = await collectCurrentDetailPayload(tab, 0, applyCollectionRequirements(mergedOptions, requirements));
+  const payload = await timing.measure("detailCollectionMs", () => collectCurrentDetailPayload(tab, 0, targetOptions));
+  payload.timingRecorder = timing;
   await onProgress({ step: 3, progress: 78, stageName: "写入飞书", message: "达人详情抓取完成，正在写入飞书电子表格" });
-  return writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏");
+  const result = await timing.measure("feishuWriteMs", () => writeDetailPayloadToSheet({ token, spreadsheetToken: parsed.token, sheetId }, payload, "已收藏"));
+  return { ...result, timings: timing.snapshot({ screenshots: { fans: shouldCaptureFansScreenshot(targetOptions), note: shouldCaptureNoteScreenshot(targetOptions) } }) };
 }
 
 function favoriteTaskId() {
@@ -5844,9 +5920,11 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0,
       options: mergedOptions,
       onProgress: reportProgress
     });
+    const elapsedSeconds = Math.round(Number(result.timings?.totalMs || 0) / 100) / 10;
+    const completedMessage = `达人完整数据已写入飞书${elapsedSeconds ? `，用时 ${elapsedSeconds} 秒` : ""}`;
     notifyDetailBackfill(
       "收藏写回完成",
-      `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书。`
+      `已${result.action === "updated" ? "更新" : "新增"}达人${userId ? ` ${userId}` : ""}到飞书${elapsedSeconds ? `，用时 ${elapsedSeconds} 秒` : ""}。`
     );
     if (taskId) {
       await updateFavoriteTask(taskId, {
@@ -5854,7 +5932,7 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0,
         step: 4,
         progress: 100,
         stageName: "完成",
-        message: "达人完整数据已写入飞书",
+        message: completedMessage,
         result
       }).catch(() => null);
     }
@@ -5867,6 +5945,7 @@ async function startFavoriteDetailToFeishu({ url, options = {}, sourceTabId = 0,
         progress: 100,
         stageName: "完成",
         userId,
+        message: completedMessage,
         result
       }).catch(() => null);
     }
@@ -6505,6 +6584,40 @@ const BACKGROUND_MESSAGE_TYPES = new Set([
   "OPEN_SIDE_PANEL"
 ]);
 
+function extensionPageBlocked(tab) {
+  return /ERR_BLOCKED_BY_CLIENT|已被屏蔽|was blocked|blocked by client/i.test(`${tab?.title || ""} ${tab?.url || ""}`);
+}
+
+async function openExtensionPageRecoverable(path) {
+  const url = chrome.runtime.getURL(path);
+  const tabs = await chrome.tabs.query({}).catch(() => []);
+  const matching = tabs.filter((tab) => String(tab?.url || tab?.pendingUrl || "") === url);
+  let target = matching.shift() || null;
+  if (matching.length) await chrome.tabs.remove(matching.map((tab) => tab.id).filter(Boolean)).catch(() => null);
+
+  if (target?.id) {
+    await chrome.tabs.update(target.id, { active: true }).catch(() => null);
+    await chrome.tabs.reload(target.id).catch(() => null);
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    target = await chrome.tabs.get(target.id).catch(() => null);
+    if (extensionPageBlocked(target)) {
+      await chrome.tabs.remove(target.id).catch(() => null);
+      target = null;
+    }
+  }
+
+  if (!target) {
+    target = await chrome.tabs.create({ url, active: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    const checked = await chrome.tabs.get(target.id).catch(() => target);
+    if (extensionPageBlocked(checked)) {
+      await chrome.tabs.remove(target.id).catch(() => null);
+      throw new Error("扩展页面被 Chrome 屏蔽，请在 chrome://extensions 中重新启用本扩展后重试。");
+    }
+  }
+  return target;
+}
+
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (!alarm?.name?.startsWith(FAVORITE_TASK_ALARM_PREFIX)) return;
   runFavoriteTask(alarm.name.slice(FAVORITE_TASK_ALARM_PREFIX.length)).catch(() => null);
@@ -6673,12 +6786,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       return;
     }
     if (message?.type === "OPEN_OPTIONS_PAGE") {
-      await chrome.runtime.openOptionsPage();
+      await openExtensionPageRecoverable("options.html");
       sendResponse({ ok: true });
       return;
     }
     if (message?.type === "OPEN_FAVORITES_PAGE") {
-      await chrome.tabs.create({ url: chrome.runtime.getURL("favorites.html") });
+      await openExtensionPageRecoverable("favorites.html");
       sendResponse({ ok: true });
       return;
     }
@@ -6696,7 +6809,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           await chrome.sidePanel.open({ windowId });
         } catch (error) {
           if (String(error?.message || error).includes("user gesture")) {
-            await chrome.tabs.create({ url: chrome.runtime.getURL("popup.html") });
+            await openExtensionPageRecoverable("popup.html");
             sendResponse({ ok: true, fallback: "tab" });
             return;
           }

@@ -114,8 +114,20 @@
     return requests[business]?.url ? [requests[business]] : [];
   }
 
-  async function triggerCooperationTab() {
-    const ready = () => Boolean(state.cache.data_summary?.cooperation && state.cache.notes_rate?.cooperation);
+  function hasCachedKind(kind, business) {
+    if (kind === "notes_detail") {
+      const byType = state.cache.notes_detail?.[business];
+      return Boolean(byType && Object.values(byType).some((pages) => pages && Object.keys(pages).length));
+    }
+    return Boolean(state.cache[kind]?.[business]);
+  }
+
+  function hasRequiredKinds(kinds, business) {
+    return kinds.every((kind) => hasCachedKind(kind, business));
+  }
+
+  async function triggerCooperationTab(requiredKinds) {
+    const ready = () => hasRequiredKinds(requiredKinds, "cooperation");
     if (ready()) return { ok: true, triggered: false, ready: true };
     const candidates = Array.from(document.querySelectorAll("button, div, span"))
       .filter((element) => element.children.length === 0 && element.textContent.trim() === "合作笔记")
@@ -133,30 +145,79 @@
     return { ok: false, triggered: true, ready: false, message: "合作笔记接口未在等待时间内返回" };
   }
 
-  async function prefetchBusinessData(targetBusiness = "cooperation") {
-    if (targetBusiness === "cooperation") {
-      const triggered = await triggerCooperationTab();
-      if (triggered.ready) return { ...triggered, business: targetBusiness, fetched: [], errors: [] };
-    }
+  async function replayBusinessRequests(targetBusiness, kinds) {
     const fetched = [];
     const errors = [];
-    const kinds = ["data_summary", "notes_rate", "notes_detail"];
+    const tasks = [];
     for (const kind of kinds) {
       const sourceRequests = requestListFor(kind, targetBusiness).length
         ? requestListFor(kind, targetBusiness)
         : requestListFor(kind, targetBusiness === "cooperation" ? "daily" : "cooperation");
-      for (const sourceRequest of sourceRequests.slice(0, kind === "notes_detail" ? 6 : 2)) {
+      const selectedRequests = kind === "notes_detail"
+        ? sourceRequests.filter((request, index, items) => {
+          let noteType = "";
+          try {
+            noteType = new URL(request.url, location.origin).searchParams.get("noteType") || "unknown";
+          } catch {
+            noteType = "unknown";
+          }
+          return items.findIndex((item) => {
+            try {
+              return (new URL(item.url, location.origin).searchParams.get("noteType") || "unknown") === noteType;
+            } catch {
+              return noteType === "unknown";
+            }
+          }) === index;
+        }).slice(0, 3)
+        : sourceRequests.slice(0, 1);
+      for (const sourceRequest of selectedRequests) {
         const nextRequest = requestWithBusiness(sourceRequest, targetBusiness);
         if (!nextRequest?.url) continue;
-        try {
-          const result = await fetchFromSnapshot(nextRequest);
-          fetched.push({ kind, ok: result?.ok, status: result?.status, url: result?.url });
-        } catch (error) {
-          errors.push({ kind, url: nextRequest.url, message: error?.message || String(error) });
-        }
+        tasks.push((async () => {
+          try {
+            const result = await fetchFromSnapshot(nextRequest);
+            fetched.push({ kind, ok: result?.ok, status: result?.status, url: result?.url });
+          } catch (error) {
+            errors.push({ kind, url: nextRequest.url, message: error?.message || String(error) });
+          }
+        })());
       }
     }
-    return { ok: !errors.length, business: targetBusiness, fetched, errors };
+    await Promise.all(tasks);
+    return { fetched, errors };
+  }
+
+  async function prefetchBusinessData(targetBusiness = "cooperation", requestedKinds = []) {
+    const allowedKinds = new Set(["data_summary", "notes_rate", "notes_detail"]);
+    const kinds = (Array.isArray(requestedKinds) && requestedKinds.length
+      ? requestedKinds
+      : Array.from(allowedKinds)).filter((kind) => allowedKinds.has(kind));
+    if (!kinds.length || hasRequiredKinds(kinds, targetBusiness)) {
+      return { ok: true, skipped: !kinds.length, ready: true, business: targetBusiness, fetched: [], errors: [], source: "cache" };
+    }
+
+    const replayed = await replayBusinessRequests(targetBusiness, kinds);
+    if (hasRequiredKinds(kinds, targetBusiness)) {
+      return { ok: true, ready: true, business: targetBusiness, ...replayed, source: "api" };
+    }
+
+    if (targetBusiness === "cooperation") {
+      const triggered = await triggerCooperationTab(kinds);
+      return {
+        ...triggered,
+        ok: Boolean(triggered.ready),
+        business: targetBusiness,
+        ...replayed,
+        source: triggered.ready ? "tab_fallback" : "api_and_tab_failed"
+      };
+    }
+    return {
+      ok: hasRequiredKinds(kinds, targetBusiness),
+      ready: hasRequiredKinds(kinds, targetBusiness),
+      business: targetBusiness,
+      ...replayed,
+      source: "api"
+    };
   }
 
   function numberParam(url, name, fallback = 0) {

@@ -489,7 +489,8 @@ async function refreshConfiguredTables() {
 }
 
 async function openFeishuConfigPage() {
-  await chrome.runtime.openOptionsPage();
+  const result = await chrome.runtime.sendMessage({ type: "OPEN_OPTIONS_PAGE" });
+  if (!result?.ok) throw new Error(result?.message || "配置页打开失败");
 }
 
 function setStatus(text, isError = false) {
