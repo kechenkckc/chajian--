@@ -268,7 +268,7 @@ function linkedCellText(value) {
 }
 
 function isSheetLinkColumn(header, canonicalField = "") {
-  if (["蒲公英链接", "主页链接", "发布链接", "头像链接"].includes(String(canonicalField || ""))) return true;
+  if (["蒲公英链接", "主页链接", "发布链接", "最新合作笔记发布链接", "头像链接"].includes(String(canonicalField || ""))) return true;
   return /(蒲公英|小红书|主页|头像|发布|视频|笔记).*(链接|网址|url)|^(链接|网址|url)$/i.test(cellText(header).replace(/\s+/g, ""));
 }
 
@@ -1658,7 +1658,23 @@ function headerShapeScore(shape, values) {
   const duplicatePenalty = mappedFields.length - new Set(mappedFields).size;
   const dataRows = (values || []).slice(shape.dataStartRow - 1, shape.dataStartRow + 9);
   const dataDensity = dataRows.reduce((count, row) => count + (row || []).filter(nonEmptyCell).length, 0);
-  return mapped * 12 + identityMapped * 8 + Math.min(width, 80) + Math.min(dataDensity, 120) / 10 - duplicatePenalty * 2 - (shape.headerRows - 1) * 1.5;
+  let dataLikeHeaderCells = 0;
+  if (shape.headerRows > 1) {
+    for (let rowIndex = shape.headerStartRow; rowIndex < shape.dataStartRow - 1; rowIndex += 1) {
+      for (const value of values?.[rowIndex] || []) {
+        const text = cellText(value).trim();
+        if (!text) continue;
+        if (
+          /https?:\/\//i.test(text)
+          || /^[-+]?\d+(?:\.\d+)?%?$/.test(text)
+          || /^\d{4}[/-]\d{1,2}[/-]\d{1,2}$/.test(text)
+          || /^[A-Z]+\d+(?:\s*[*+\-/]\s*\d+(?:\.\d+)?)?$/i.test(text)
+        ) dataLikeHeaderCells += 1;
+      }
+    }
+  }
+  return mapped * 12 + identityMapped * 8 + Math.min(width, 80) + Math.min(dataDensity, 120) / 10
+    - duplicatePenalty * 2 - (shape.headerRows - 1) * 1.5 - dataLikeHeaderCells * 12;
 }
 
 function shapeHeaderWriteRow(shape) {
@@ -2049,7 +2065,9 @@ function rowObjectFromShape(line, columns) {
     const rawValue = line[column.columnIndex];
     const value = isSheetLinkColumn(column.fieldName, column.canonicalField) ? linkedCellText(rawValue) : cellText(rawValue);
     row[column.fieldName] = value;
-    if (column.canonicalField && row[column.canonicalField] === undefined) row[column.canonicalField] = value;
+    if (column.canonicalField && (row[column.canonicalField] === undefined || nonEmptyCell(value))) {
+      row[column.canonicalField] = value;
+    }
   }
   return row;
 }
@@ -3101,6 +3119,56 @@ async function readOnlineCreatorTable(url, selectedSheetIds = []) {
     ok: true,
     source: parsedUrl.hostname === "docs.google.com" ? "Google Sheets" : "公开 CSV",
     datasets: [{ id: "online-csv", title: "当前在线表格", csv: await response.text() }]
+  };
+}
+
+function onlineCreatorRowMatches(row, identity = {}) {
+  const expectedUserId = String(identity.userId || "").trim();
+  const expectedRedId = normalizeKey(identity.redId || "");
+  const expectedName = normalizeKey(identity.name || "");
+  if (expectedUserId && extractPgyUserId(row) === expectedUserId) return true;
+  if (expectedRedId && normalizeKey(valueByAliases(row, "小红书号")) === expectedRedId) return true;
+  return Boolean(expectedName && normalizeKey(valueByAliases(row, "达人昵称")) === expectedName);
+}
+
+async function recoverOnlineCreatorNote(url, sheetId, identity = {}) {
+  const cleanUrl = String(url || "").trim();
+  const targetSheetId = String(sheetId || "").trim();
+  if (!cleanUrl || !targetSheetId) throw new Error("缺少在线表格地址或子表 ID。");
+  const parsedUrl = new URL(cleanUrl);
+  if (!parsedUrl.hostname.endsWith("feishu.cn") && !parsedUrl.hostname.endsWith("larksuite.com")) {
+    throw new Error("笔记链接补取目前仅支持飞书表格。");
+  }
+  const options = await chrome.storage.local.get({ feishuAppId: "", feishuAppSecret: "" });
+  if (!options.feishuAppId || !options.feishuAppSecret) throw new Error("请先在飞书配置页填写 App ID 和 App Secret。");
+  const token = await tenantToken(options.feishuAppId, options.feishuAppSecret);
+  const target = await resolveWikiTarget(parseFeishuUrl(cleanUrl), token);
+  let rows = [];
+  if (target.resourceType === "sheet") {
+    const values = await readSheetValuesFlexible(token, target.token, targetSheetId);
+    const shape = detectSheetShape(values);
+    rows = sheetRowsToShapeObjects(values, shape)
+      .filter((item) => Object.values(item.row || {}).some(nonEmptyCell))
+      .map((item) => item.row);
+  } else if (target.resourceType === "bitable") {
+    const records = await readBitableRecords(token, target.token, targetSheetId);
+    rows = records.map((record) => record.fields || {});
+  } else {
+    throw new Error("该飞书链接不是电子表格或多维表格。");
+  }
+  const row = rows.find((candidate) => onlineCreatorRowMatches(candidate, identity));
+  if (!row) throw new Error("原飞书子表中未找到该达人。");
+  const sourceUrl = linkedCellText(valueByAliases(row, "最新合作笔记发布链接"));
+  const noteId = xhsNoteIdFromValue(valueByAliases(row, "最新合作笔记ID")) || xhsNoteIdFromValue(sourceUrl);
+  if (!sourceUrl && !noteId) throw new Error("原飞书子表中未识别到该达人的笔记链接，请检查发布链接单元格。");
+  return {
+    ok: true,
+    note: {
+      noteId,
+      sourceUrl,
+      title: cellText(valueByAliases(row, "最新合作笔记标题")),
+      publishedAt: cellText(valueByAliases(row, "最新合作笔记发布时间"))
+    }
   };
 }
 
@@ -6428,6 +6496,7 @@ const BACKGROUND_MESSAGE_TYPES = new Set([
   "REFRESH_ALL_PREFAVORITES",
   "RESOLVE_PGY_NOTE_LINKS",
   "READ_ONLINE_CREATOR_TABLE",
+  "RECOVER_ONLINE_CREATOR_NOTE",
   "INSPECT_CREATOR_COOPERATION_COUNTS",
   "LIST_ONLINE_CREATOR_TABLE_SHEETS",
   "STOP_DETAIL_BACKFILL",
@@ -6580,6 +6649,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     }
     if (message?.type === "READ_ONLINE_CREATOR_TABLE") {
       const result = await readOnlineCreatorTable(message.url || "", message.sheetIds || []);
+      sendResponse(result);
+      return;
+    }
+    if (message?.type === "RECOVER_ONLINE_CREATOR_NOTE") {
+      const result = await recoverOnlineCreatorNote(message.url || "", message.sheetId || "", message.identity || {});
       sendResponse(result);
       return;
     }

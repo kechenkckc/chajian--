@@ -1,6 +1,8 @@
 const STORAGE_KEY = "pgyPreFavorites";
 const TAG_LIBRARY_KEY = "pgyPreFavoriteTagLibrary";
 const DEFAULT_CUSTOM_COLUMNS = ["返点比例", "达人评价", "合作备注"];
+const RATING_FIELD_ALIASES = new Set(["达人评分", "达人评价", "评分", "星级", "达人星级"]);
+const LATEST_NOTE_LINK_CACHE_TTL_MS = 6 * 60 * 60 * 1000;
 const CUSTOM_COLUMNS_INITIALIZED_KEY = "favoriteCustomColumnsInitialized";
 
 const favoriteCount = document.getElementById("favoriteCount");
@@ -166,6 +168,25 @@ function normalizeRating(value, fallbackDisplay = "stars", fallbackColumn = "达
     display: (value?.display || fallbackDisplay) === "score" ? "score" : "stars",
     columnName: String(value?.columnName || fallbackColumn || "达人评分").trim() || "达人评分"
   };
+}
+
+function ratingFieldKey(value) {
+  return String(value ?? "").trim().toLowerCase().replace(/[\s_\-—:：()（）/\\]+/g, "");
+}
+
+function ratingFromCustomFields(fields) {
+  for (const [fieldName, rawValue] of Object.entries(fields || {})) {
+    if (!RATING_FIELD_ALIASES.has(ratingFieldKey(fieldName))) continue;
+    const text = String(rawValue ?? "").trim();
+    const stars = (text.match(/[★⭐]/g) || []).length;
+    const match = text.match(/-?\d+(?:\.\d+)?/);
+    if (!match && !stars) continue;
+    const denominator = Number((text.match(/\/\s*(5|10)(?:\D|$)/) || [])[1]);
+    const number = match ? Number(match[0]) : stars;
+    if (!Number.isFinite(number)) continue;
+    return normalizeRating({ value: number, max: denominator === 5 ? 5 : 10, columnName: fieldName });
+  }
+  return null;
 }
 
 function importFieldOptions() {
@@ -517,6 +538,15 @@ function noteIdFromValue(value) {
     || (/^[0-9a-f]{24}$/i.test(decoded) ? decoded : "");
 }
 
+function normalizeLatestNoteDate(value) {
+  const text = String(value ?? "").trim();
+  if (!/^\d{5}(?:\.\d+)?$/.test(text)) return text;
+  const serial = Number(text);
+  if (!Number.isFinite(serial) || serial < 1 || serial > 100000) return text;
+  const date = new Date(Date.UTC(1899, 11, 30) + Math.round(serial * 86400000));
+  return Number.isNaN(date.getTime()) ? text : date.toISOString().slice(0, 10);
+}
+
 function hasLatestCooperationNote(item) {
   return Boolean(
     String(item?.latestCooperationNoteId || "").trim()
@@ -530,6 +560,15 @@ function hasLatestCooperationNote(item) {
 function isResolvedPgyNoteUrl(value) {
   const url = normalizeNoteUrl(value);
   return Boolean(url && /[?&]xsec_token=/i.test(url));
+}
+
+function cachedLatestNoteUrl(item) {
+  const url = normalizeNoteUrl(item?.latestCooperationNoteUrl);
+  if (!isResolvedPgyNoteUrl(url)) return "";
+  const fetchedAt = Date.parse(String(item?.latestCooperationNoteLinkFetchedAt || ""));
+  if (!Number.isFinite(fetchedAt)) return "";
+  const age = Date.now() - fetchedAt;
+  return age >= 0 && age < LATEST_NOTE_LINK_CACHE_TTL_MS ? url : "";
 }
 
 function latestNoteTarget(item) {
@@ -547,6 +586,15 @@ function latestNoteTarget(item) {
 function canResolveLatestNoteLink(item) {
   const target = latestNoteTarget(item);
   return Boolean(target.noteId || target.sourceUrl);
+}
+
+function latestNoteRecoverySource(item) {
+  return [...(item?.acquisitionSources || [])].reverse().find((entry) => {
+    const url = String(entry?.url || "").trim();
+    const resourceId = String(entry?.resourceId || "").trim();
+    const sourceType = `${entry?.type || ""} ${entry?.key || ""}`;
+    return Boolean(url && resourceId && /飞书|feishu|sheet|spreadsheet/i.test(sourceType));
+  }) || null;
 }
 
 function avatarInitial(name) {
@@ -641,6 +689,13 @@ function normalizeFavorites(items) {
       const migratedCustomTags = storedCategoryTags.filter((tag) => !officialCategoryTags.includes(tag));
       const acquisitionSources = normalizeAcquisitionSources(item?.acquisitionSources, item?.source);
       const storedCooperationCount = String(item?.cooperationCount ?? item?.["合作次数"] ?? "").trim();
+      const normalizedCustomFields = normalizeCustomFields(item);
+      const normalizedRating = normalizeRating(item?.rating) || ratingFromCustomFields(normalizedCustomFields);
+      if (normalizedRating) {
+        Object.keys(normalizedCustomFields).forEach((fieldName) => {
+          if (ratingFieldKey(fieldName) === ratingFieldKey(normalizedRating.columnName)) delete normalizedCustomFields[fieldName];
+        });
+      }
       return {
       userId: String(item?.userId || "").trim(),
       name: String(item?.name || "").trim(),
@@ -675,8 +730,8 @@ function normalizeFavorites(items) {
       bio: sanitizeBio(item?.bio),
       categoryTags: officialCategoryTags,
       customTags: normalizeTagList([...normalizeTagList(item?.customTags), ...migratedCustomTags]),
-      rating: normalizeRating(item?.rating),
-      customFields: normalizeCustomFields(item),
+      rating: normalizedRating,
+      customFields: normalizedCustomFields,
       categorySource: officialCategoryTags.length ? categorySource : "",
       source: String(item?.source || "").trim(),
       acquisitionSources,
@@ -1182,21 +1237,82 @@ async function refreshLatestNoteLinks(targets, { announce = false } = {}) {
   return result;
 }
 
+async function recoverLatestNoteFromSource(item) {
+  const source = latestNoteRecoverySource(item);
+  if (!source) throw new Error("该达人没有可用于补取笔记链接的在线表格来源。");
+  const result = await chrome.runtime.sendMessage({
+    type: "RECOVER_ONLINE_CREATOR_NOTE",
+    url: source.url,
+    sheetId: source.resourceId,
+    identity: {
+      userId: item.userId,
+      redId: item.redId,
+      name: item.name
+    }
+  });
+  if (!result?.ok) throw new Error(result?.message || "在线表格读取失败");
+  const recovered = {
+    latestCooperationNoteId: String(result.note?.noteId || "").trim(),
+    latestCooperationNoteTitle: String(result.note?.title || "").trim(),
+    latestCooperationNotePublishedAt: normalizeLatestNoteDate(result.note?.publishedAt),
+    latestCooperationNoteSourceUrl: normalizeNoteUrl(result.note?.sourceUrl),
+    latestCooperationNoteUrl: normalizeNoteUrl(result.note?.sourceUrl),
+    latestCooperationNoteLinkFetchedAt: new Date().toISOString()
+  };
+  if (!canResolveLatestNoteLink(recovered)) {
+    throw new Error("原飞书子表中未识别到该达人的笔记链接，请检查发布链接单元格。");
+  }
+  const nextFavorites = favorites.map((current) => current.userId === item.userId
+    ? {
+        ...current,
+        latestCooperationNoteId: recovered.latestCooperationNoteId || current.latestCooperationNoteId || "",
+        latestCooperationNoteTitle: recovered.latestCooperationNoteTitle || current.latestCooperationNoteTitle || "",
+        latestCooperationNotePublishedAt: recovered.latestCooperationNotePublishedAt || current.latestCooperationNotePublishedAt || "",
+        latestCooperationNoteSourceUrl: recovered.latestCooperationNoteSourceUrl || recovered.latestCooperationNoteUrl || current.latestCooperationNoteSourceUrl || "",
+        latestCooperationNoteUrl: recovered.latestCooperationNoteUrl || current.latestCooperationNoteUrl || "",
+        latestCooperationNoteLinkFetchedAt: recovered.latestCooperationNoteLinkFetchedAt
+      }
+    : current);
+  await saveFavorites(nextFavorites);
+  return favorites.find((current) => current.userId === item.userId) || item;
+}
+
 async function openLatestCooperationNote(userId) {
-  const current = favorites.find((item) => item.userId === userId);
+  let current = favorites.find((item) => item.userId === userId);
   if (!current || !hasLatestCooperationNote(current)) throw new Error("该达人没有最新合作笔记。");
-  setStatus(`正在刷新「${current.name || current.userId}」的笔记访问链接...`);
+  if (!canResolveLatestNoteLink(current)) {
+    setStatus(`正在从原表获取「${current.name || current.userId}」的笔记链接...`);
+    current = await recoverLatestNoteFromSource(current);
+  }
+  const cachedUrl = cachedLatestNoteUrl(current);
+  if (cachedUrl) {
+    await chrome.tabs.create({ url: cachedUrl });
+    setStatus(`已打开「${current.latestCooperationNoteTitle || current.name || "最新合作笔记"}」。`);
+    return;
+  }
+  setStatus(`笔记链接缓存已过期，正在通过蒲公英刷新...`);
   let noteUrl = "";
+  let usedStoredUrl = false;
   try {
     const result = await refreshLatestNoteLinks([current]);
     const resolved = (result.results || []).find((item) => String(item?.userId || item?.key || "") === userId);
     noteUrl = normalizeNoteUrl(resolved?.noteLink);
+    if (!noteUrl && isResolvedPgyNoteUrl(current.latestCooperationNoteUrl)) {
+      noteUrl = normalizeNoteUrl(current.latestCooperationNoteUrl);
+      usedStoredUrl = true;
+    }
   } catch (error) {
     noteUrl = isResolvedPgyNoteUrl(current.latestCooperationNoteUrl) ? normalizeNoteUrl(current.latestCooperationNoteUrl) : "";
     if (!noteUrl) throw error;
+    usedStoredUrl = true;
   }
   if (!noteUrl) throw new Error("蒲公英未返回可访问的笔记链接，请确认登录状态后重试。");
   await chrome.tabs.create({ url: noteUrl });
+  if (usedStoredUrl) {
+    await saveFavorites(favorites.map((item) => item.userId === userId
+      ? { ...item, latestCooperationNoteLinkFetchedAt: new Date().toISOString() }
+      : item));
+  }
   setStatus(`已打开「${current.latestCooperationNoteTitle || current.name || "最新合作笔记"}」。`);
 }
 
@@ -1513,12 +1629,13 @@ function renderFavorites() {
     const latestNoteUrl = normalizeNoteUrl(item.latestCooperationNoteUrl);
     const latestNoteTitle = String(item.latestCooperationNoteTitle || "").trim();
     const latestNoteId = String(item.latestCooperationNoteId || "").trim();
+    const latestNoteCanOpen = Boolean(latestNoteUrl || latestNoteId || item.latestCooperationNoteSourceUrl || latestNoteRecoverySource(item));
     const latestNoteHtml = hasLatestCooperationNote(item) ? `
       <div class="latest-note">
         <span>最新合作笔记</span>
         ${latestNoteTitle ? `<strong title="${escapeHtml(latestNoteTitle)}">${escapeHtml(latestNoteTitle)}</strong>` : ""}
         ${latestNotePublishedAt ? `<small>${escapeHtml(latestNotePublishedAt)}</small>` : ""}
-        ${latestNoteUrl || latestNoteId || item.latestCooperationNoteSourceUrl ? `<button type="button" data-action="open-latest-note">查看笔记</button>` : ""}
+        ${latestNoteCanOpen ? `<button type="button" data-action="open-latest-note">查看笔记</button>` : ""}
       </div>
     ` : "";
     const dataRefreshAt = dataRefreshTimestamp(item);
@@ -1889,7 +2006,30 @@ favoriteList.addEventListener("click", (event) => {
     return;
   }
   if (button.dataset.action === "open-latest-note") {
-    openLatestCooperationNote(userId).catch((error) => setStatus(error.message, true));
+    const originalText = button.textContent;
+    button.disabled = true;
+    button.setAttribute("aria-busy", "true");
+    button.textContent = "正在打开...";
+    button.closest(".latest-note")?.classList.add("is-opening");
+    openLatestCooperationNote(userId).then(() => {
+      if (!button.isConnected) return;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = originalText;
+      button.closest(".latest-note")?.classList.remove("is-opening");
+    }).catch((error) => {
+      setStatus(error.message, true);
+      if (!button.isConnected) return;
+      button.disabled = false;
+      button.removeAttribute("aria-busy");
+      button.textContent = "重试";
+      button.title = error.message;
+      button.closest(".latest-note")?.classList.remove("is-opening");
+      window.setTimeout(() => {
+        if (!button.isConnected || button.disabled) return;
+        button.textContent = originalText;
+      }, 3000);
+    });
     return;
   }
   if (button.dataset.action === "remove") {

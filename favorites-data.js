@@ -31,6 +31,7 @@ const FavoriteDataTools = (() => {
     updatedAt: ["更新时间", "采集时间", "updatedAt"]
   };
   const KNOWN_HEADERS = new Set(Object.values(FIELD_ALIASES).flat().map(normalizeHeader));
+  const RATING_COLUMN_ALIASES = ["达人评分", "达人评价", "评分", "星级", "达人星级"];
   const LINK_HEADERS = new Set(["avatar", "xhsUrl", "pgyUrl", "latestCooperationNoteUrl"]
     .flatMap((field) => FIELD_ALIASES[field] || [])
     .map(normalizeHeader));
@@ -297,17 +298,28 @@ const FavoriteDataTools = (() => {
       record.categorySource = "pgy_profile";
     }
     const ratingColumn = String(options.ratingColumn || "").trim();
-    const importedRating = ratingColumn ? ratingValue(values.get(normalizeHeader(ratingColumn))) : null;
+    let resolvedRatingColumn = ratingColumn;
+    let importedRating = ratingColumn ? ratingValue(values.get(normalizeHeader(ratingColumn))) : null;
+    if (importedRating === null) {
+      for (const candidate of RATING_COLUMN_ALIASES) {
+        const candidateRating = ratingValue(values.get(normalizeHeader(candidate)));
+        if (candidateRating === null) continue;
+        importedRating = candidateRating;
+        resolvedRatingColumn = candidate;
+        break;
+      }
+    }
     if (importedRating !== null) {
       record.rating = {
         value: importedRating,
         max: 10,
         display: options.ratingDisplay === "score" ? "score" : "stars",
-        columnName: ratingColumn
+        columnName: resolvedRatingColumn
       };
     }
     const customFields = {};
     for (const columnName of customColumnNames(options.customColumns)) {
+      if (importedRating !== null && normalizeHeader(columnName) === normalizeHeader(resolvedRatingColumn)) continue;
       const value = values.get(normalizeHeader(columnName));
       if (value !== undefined && value !== "") customFields[columnName] = value;
     }

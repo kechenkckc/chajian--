@@ -2,6 +2,7 @@
 <html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>蒲公英预收藏后台</title>
     <link rel="stylesheet" href="favorites.css" />
   </head>
@@ -302,23 +303,28 @@
         </div>
       </details>
 
-      <section class="facet-panel" aria-labelledby="facetPanelTitle">
-        <header class="facet-panel-header">
+      <details class="facet-panel" open>
+        <summary class="facet-panel-header">
           <div>
             <span class="filter-panel-kicker">CLASSIFY</span>
             <h2 id="facetPanelTitle">官方类目与用户标签</h2>
           </div>
-          <p>类目来自蒲公英官方，标签来自用户表格或手动设置；人数会随筛选实时变化。</p>
-        </header>
-        <div class="category-filter">
-          <span>蒲公英官方类目</span>
-          <div id="categoryFilters" class="category-chips"></div>
+          <div class="facet-panel-header-meta">
+            <p>类目来自蒲公英官方，标签来自用户表格或手动设置；人数会随筛选实时变化。</p>
+            <span class="filter-panel-toggle"><b>类目与标签</b><i aria-hidden="true"></i></span>
+          </div>
+        </summary>
+        <div class="facet-panel-body">
+          <details class="category-filter facet-group" open>
+            <summary class="facet-group-summary"><span>蒲公英官方类目</span><i aria-hidden="true"></i></summary>
+            <div id="categoryFilters" class="category-chips"></div>
+          </details>
+          <details class="category-filter facet-group" open>
+            <summary class="facet-group-summary"><span>用户标签</span><i aria-hidden="true"></i></summary>
+            <div id="tagFilters" class="category-chips"></div>
+          </details>
         </div>
-        <div class="category-filter">
-          <span>用户标签</span>
-          <div id="tagFilters" class="category-chips"></div>
-        </div>
-      </section>
+      </details>
 
       <section id="writePanel" class="write-panel">
         <button id="closeWritePanelBtn" type="button" class="write-panel-close" aria-label="关闭批量操作栏" title="关闭批量操作栏">×</button>
